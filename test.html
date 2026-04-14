@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC 手动信令文件传输</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; max-width: 800px; }
+        .panel { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; background-color: #f9f9f9; }
+        textarea { width: 100%; height: 100px; margin-top: 10px; font-family: monospace; }
+        button { padding: 8px 15px; margin-top: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 3px; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #status { font-weight: bold; color: red; }
+    </style>
+</head>
+<body>
+
+    <h2>WebRTC 手动建立连接 & 文件传输测试</h2>
+    <p>当前连接状态: <span id="status">未连接</span></p>
+
+    <div class="panel">
+        <h3>步骤 1 & 2: 信令交换区 (SDP + ICE)</h3>
+        <p>1. <b>电脑A (发起方):</b> 点击「创建 Offer」，等待生成完毕后，复制【我的信令数据】发给电脑B。</p>
+        <p>2. <b>电脑B (接收方):</b> 将收到的数据粘贴到【远程信令数据】中，点击「接受并创建 Answer」，然后复制【我的信令数据】发给电脑A。</p>
+        <p>3. <b>电脑A (发起方):</b> 将收到的 Answer 粘贴到【远程信令数据】中，点击「确认 Answer 完成连接」。</p>
+
+        <button id="btn-create-offer">1. [电脑A] 创建 Offer</button>
+        <button id="btn-create-answer">2. [电脑B] 接受并创建 Answer</button>
+        <button id="btn-accept-answer">3. [电脑A] 确认 Answer 完成连接</button>
+
+        <label for="local-signal"><br><br><b>【我的信令数据】(请复制这里的文本发给对方):</b></label>
+        <textarea id="local-signal" readonly placeholder="等待生成..."></textarea>
+
+        <label for="remote-signal"><br><b>【远程信令数据】(请把对方发来的文本粘贴到这里):</b></label>
+        <textarea id="remote-signal" placeholder="在此粘贴对方的信令数据..."></textarea>
+    </div>
+
+    <div class="panel">
+        <h3>步骤 4: 文件传输区</h3>
+        <input type="file" id="file-input" disabled>
+        <button id="btn-send-file" disabled>发送文件</button>
+        <p>传输进度: <span id="progress">0%</span></p>
+        <div id="download-area"></div>
+    </div>
+
+    <script>
+        // DOM 元素
+        const UI = {
+            btnOffer: document.getElementById('btn-create-offer'),
+            btnAnswer: document.getElementById('btn-create-answer'),
+            btnAccept: document.getElementById('btn-accept-answer'),
+            localSignal: document.getElementById('local-signal'),
+            remoteSignal: document.getElementById('remote-signal'),
+            status: document.getElementById('status'),
+            fileInput: document.getElementById('file-input'),
+            btnSendFile: document.getElementById('btn-send-file'),
+            progress: document.getElementById('progress'),
+            downloadArea: document.getElementById('download-area')
+        };
+
+        let pc; // RTCPeerConnection 实例
+        let dataChannel; // RTCDataChannel 实例
+
+        // 文件接收相关的变量
+        let receiveBuffer = [];
+        let receivedSize = 0;
+        let incomingFileInfo = null;
+
+        // 配置 WebRTC (使用 Google 免费的 STUN 服务器进行 NAT 穿透)
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+
+        // 初始化 PeerConnection
+        function initPeerConnection() {
+            console.log("【WebRTC】正在初始化 RTCPeerConnection...");
+            pc = new RTCPeerConnection(rtcConfig);
+
+            // 监听 ICE 候选者收集
+            pc.onicecandidate = event => {
+                if (event.candidate) {
+                    console.log("【ICE】发现新的候选者 (网络路径):", event.candidate.candidate);
+                } else {
+                    // 当 candidate 为 null 时，表示所有候选者收集完毕
+                    console.log("【ICE】所有候选者收集完毕！此时 LocalDescription 已包含所有网络路径。");
+                    UI.localSignal.value = JSON.stringify(pc.localDescription);
+                    alert("信令生成完毕，请复制【我的信令数据】！");
+                }
+            };
+
+            // 监听连接状态变化
+            pc.onconnectionstatechange = () => {
+                console.log("【状态】Connection State 变为:", pc.connectionState);
+                if (pc.connectionState === 'connected') {
+                    UI.status.textContent = '已连接 ✅';
+                    UI.status.style.color = 'green';
+                    UI.fileInput.disabled = false;
+                    UI.btnSendFile.disabled = false;
+                } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    UI.status.textContent = '连接断开 ❌';
+                    UI.status.style.color = 'red';
+                }
+            };
+
+            // 监听 ICE 状态变化 (用于调试 NAT 穿透)
+            pc.oniceconnectionstatechange = () => {
+                console.log("【状态】ICE Connection State 变为:", pc.iceConnectionState);
+            };
+
+            // 【作为接收方】监听远端创建的 DataChannel
+            pc.ondatachannel = event => {
+                console.log("【DataChannel】接收到远端创建的数据通道:", event.channel.label);
+                setupDataChannel(event.channel);
+            };
+        }
+
+        // 配置 DataChannel 事件
+        function setupDataChannel(channel) {
+            dataChannel = channel;
+            dataChannel.binaryType = 'arraybuffer'; // 接收二进制数据
+
+            dataChannel.onopen = () => {
+                console.log("【DataChannel】通道已开启！可以发送数据了。");
+            };
+
+            dataChannel.onclose = () => {
+                console.log("【DataChannel】通道已关闭。");
+            };
+
+            dataChannel.onmessage = event => {
+                // 1. 如果收到的是字符串，说明是文件元数据 (Meta Info)
+                if (typeof event.data === 'string') {
+                    incomingFileInfo = JSON.parse(event.data);
+                    console.log(`【接收文件】收到文件信息: ${incomingFileInfo.name} (${incomingFileInfo.size} bytes)`);
+                    receiveBuffer = [];
+                    receivedSize = 0;
+                    UI.progress.textContent = "准备接收...";
+                } 
+                // 2. 如果收到的是 ArrayBuffer，说明是文件分片数据
+                else if (event.data instanceof ArrayBuffer) {
+                    receiveBuffer.push(event.data);
+                    receivedSize += event.data.byteLength;
+                    
+                    const progressPercent = ((receivedSize / incomingFileInfo.size) * 100).toFixed(1);
+                    UI.progress.textContent = `接收中: ${progressPercent}%`;
+
+                    // 判断是否接收完毕
+                    if (receivedSize === incomingFileInfo.size) {
+                        console.log("【接收文件】文件接收完成！正在生成下载链接...");
+                        const blob = new Blob(receiveBuffer);
+                        const downloadUrl = URL.createObjectURL(blob);
+                        
+                        const link = document.createElement('a');
+                        link.href = downloadUrl;
+                        link.download = incomingFileInfo.name;
+                        link.textContent = `点击下载: ${incomingFileInfo.name}`;
+                        link.style.display = 'block';
+                        UI.downloadArea.appendChild(link);
+                        
+                        UI.progress.textContent = "接收完成 ✅";
+                        incomingFileInfo = null; // 重置
+                    }
+                }
+            };
+        }
+
+        // [电脑A] 操作 1: 创建 Offer
+        UI.btnOffer.onclick = async () => {
+            initPeerConnection();
+            
+            console.log("【电脑A】正在创建 DataChannel (标签名: fileTransfer)...");
+            const channel = pc.createDataChannel('fileTransfer');
+            setupDataChannel(channel);
+
+            console.log("【电脑A】正在生成 Offer...");
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            console.log("【电脑A】已设置 LocalDescription，正在等待 ICE 收集...");
+            UI.localSignal.value = "正在收集网络路径，请稍候...";
+        };
+
+        // [电脑B] 操作 2: 接受 Offer 并创建 Answer
+        UI.btnAnswer.onclick = async () => {
+            const remoteStr = UI.remoteSignal.value;
+            if (!remoteStr) return alert("请先粘贴电脑A的信令数据！");
+
+            initPeerConnection();
+
+            const offerDesc = JSON.parse(remoteStr);
+            console.log("【电脑B】解析到远端 Offer，正在设置 RemoteDescription...");
+            await pc.setRemoteDescription(offerDesc);
+
+            console.log("【电脑B】正在生成 Answer...");
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            console.log("【电脑B】已设置 LocalDescription，正在等待 ICE 收集...");
+            UI.localSignal.value = "正在收集网络路径，请稍候...";
+        };
+
+        // [电脑A] 操作 3: 接受 Answer 完成连接
+        UI.btnAccept.onclick = async () => {
+            const remoteStr = UI.remoteSignal.value;
+            if (!remoteStr) return alert("请先粘贴电脑B的信令数据！");
+
+            const answerDesc = JSON.parse(remoteStr);
+            console.log("【电脑A】解析到远端 Answer，正在设置 RemoteDescription...");
+            await pc.setRemoteDescription(answerDesc);
+            console.log("【电脑A】信令握手完成！等待 P2P 打洞连接...");
+        };
+
+        // 发送文件逻辑
+        UI.btnSendFile.onclick = () => {
+            const file = UI.fileInput.files[0];
+            if (!file) return alert("请先选择一个文件！");
+
+            console.log(`【发送文件】准备发送: ${file.name}, 大小: ${file.size} bytes`);
+            
+            // 1. 发送文件元数据
+            dataChannel.send(JSON.stringify({
+                name: file.name,
+                size: file.size
+            }));
+
+            // 2. 分片读取并发送文件 (16KB 每块)
+            const chunkSize = 16384; 
+            let offset = 0;
+            const fileReader = new FileReader();
+
+            // 定义读取分片的函数
+            const readNextChunk = () => {
+                const slice = file.slice(offset, offset + chunkSize);
+                fileReader.readAsArrayBuffer(slice);
+            };
+
+            fileReader.onload = (e) => {
+                // 检查 DataChannel 缓冲区，防止发送过快导致底层崩溃
+                // 如果缓冲区超过限制 (例如 64KB)，则稍作等待后再试
+                if (dataChannel.bufferedAmount > 65535) {
+                    setTimeout(() => {
+                        // 使用 setTimeout 重新触发 onLoad 里的发送逻辑
+                        fileReader.onload(e); 
+                    }, 50);
+                    return;
+                }
+
+                // 发送数据块
+                dataChannel.send(e.target.result);
+                offset += e.target.result.byteLength;
+                
+                const progressPercent = ((offset / file.size) * 100).toFixed(1);
+                UI.progress.textContent = `发送中: ${progressPercent}%`;
+
+                // 如果未发完，继续读取下一块
+                if (offset < file.size) {
+                    readNextChunk();
+                } else {
+                    console.log("【发送文件】所有数据块发送完毕！");
+                    UI.progress.textContent = "发送完成 ✅";
+                }
+            };
+
+            fileReader.onerror = error => console.error("读取文件出错:", error);
+
+            // 启动第一次读取
+            readNextChunk();
+        };
+
+    </script>
+</body>
+</html>
