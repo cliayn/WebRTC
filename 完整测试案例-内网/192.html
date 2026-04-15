@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <title>内网直传 · 修复版</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', 'Roboto', sans-serif; }
+        body { background: #0b1120; margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 12px; }
+        .container { max-width: 600px; width: 100%; background: #1e293b; border-radius: 28px; padding: 20px 16px; color: #e2e8f0; box-shadow: 0 20px 30px rgba(0,0,0,0.5); }
+        h1 { margin: 0 0 8px 0; font-weight: 500; font-size: 1.6rem; }
+        .server-config { display: flex; gap: 8px; margin-bottom: 20px; align-items: center; background: #0f172a; padding: 10px 14px; border-radius: 40px; }
+        .server-config input { flex: 1; background: #020617; border: 1px solid #334155; color: white; padding: 10px; border-radius: 30px; font-size: 1rem; }
+        .badge { background: #2563eb; padding: 4px 12px; border-radius: 30px; font-size: 0.8rem; }
+        .role-selector { display: flex; gap: 12px; margin: 20px 0; }
+        .role-btn { flex: 1; background: #2d3a52; border: none; color: white; padding: 16px; border-radius: 24px; font-size: 1.2rem; font-weight: 600; cursor: pointer; border: 2px solid #5f7a9f; box-shadow: 0 4px 0 #0f172a; }
+        .role-btn.active { background: #2563eb; border-color: #60a5fa; }
+        .panel { background: #0f172a; border-radius: 24px; padding: 20px 16px; margin-top: 16px; border: 1px solid #334155; }
+        .btn { background: #2d3a52; border: none; color: white; padding: 14px 20px; border-radius: 40px; font-weight: 500; cursor: pointer; border: 1px solid #5f7a9f; box-shadow: 0 3px 0 #0f172a; font-size: 1rem; width: 100%; text-align: center; }
+        .btn-primary { background: #2563eb; }
+        .btn-success { background: #0d9488; }
+        .btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #0f172a; }
+        .btn:disabled { opacity: 0.5; transform: none; pointer-events: none; }
+        #qrcode canvas { max-width: 100%; height: auto; }
+        video { width: 100%; border-radius: 20px; border: 2px solid #334155; background: #000; }
+        .log-box { background: #020617; border-radius: 16px; padding: 14px; font-size: 0.8rem; color: #b0c8e8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; margin-top: 16px; }
+        .flex-row { display: flex; gap: 10px; margin: 16px 0; }
+        .status-row { display: flex; gap: 12px; margin: 12px 0; font-size: 0.9rem; }
+        .footer-note { color: #6b85a0; text-align: center; margin-top: 12px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📡 内网直传 · 修复版</h1>
+    <div class="server-config">
+        <span>🌐</span>
+        <input type="text" id="serverUrl" value="192.168.43.15:8800" placeholder="IP:端口">
+        <button class="btn" id="connectServerBtn" style="width:auto; padding:10px 18px;">连接</button>
+        <span id="serverStatus">⚪</span>
+    </div>
+    <div class="role-selector">
+        <button class="role-btn active" id="roleReceiver">📱 接收者<br><small>生成二维码</small></button>
+        <button class="role-btn" id="roleSender">📷 发送者<br><small>扫描二维码</small></button>
+    </div>
+
+    <!-- 接收者面板 -->
+    <div id="receiverPanel" class="panel">
+        <h2>📲 接收者</h2>
+        <button class="btn btn-primary" id="genOfferBtn">🎯 生成 Offer 并创建二维码</button>
+        <div id="qrcode" style="margin:20px 0; text-align:center;"></div>
+        <div class="status-row">
+            <span>ICE: <span id="iceStateR">⏳ 等待</span></span>
+            <span>通道: <span id="dcStateR">⚪ 未开启</span></span>
+            <span>连接: <span id="connStateR">⚪ 新</span></span>
+        </div>
+    </div>
+
+    <!-- 发送者面板 -->
+    <div id="senderPanel" class="panel" style="display:none;">
+        <h2>📷 发送者</h2>
+        <button class="btn btn-primary" id="startScanBtn">📸 开启摄像头扫描</button>
+        <video id="video" autoplay playsinline style="margin:16px 0; display:none;"></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+        <div id="scanResult" style="color:#a5f3fc;">等待扫描...</div>
+        <div class="status-row" style="margin-top:12px;">
+            <span>连接: <span id="connStateS">⚪ 新</span></span>
+            <span>通道: <span id="dcStateS">⚪ 未开启</span></span>
+        </div>
+    </div>
+
+    <!-- 文件传输 -->
+    <div class="panel">
+        <h2>📁 文件传输</h2>
+        <input type="file" id="fileInput" style="background:#1e293b; color:white; border-radius:30px; padding:12px; width:100%; border:1px solid #475569;">
+        <div class="flex-row">
+            <button class="btn btn-primary" id="sendFileBtn" disabled>📤 发送</button>
+            <button class="btn" id="pingBtn" disabled>📶 Ping</button>
+        </div>
+    </div>
+
+    <div class="log-box" id="logBox">📋 日志区域...</div>
+    <div class="footer-note">✅ 二维码仅含关键字段，扫描秒识别</div>
+</div>
+
+<script>
+    (function(){
+        "use strict";
+
+        let ws = null, pc = null, dc = null;
+        let serverConnected = false, myId = null, targetId = null;
+        let localCandidates = [];
+        let role = 'receiver';
+        let receiveBuffer = [], receivedFileName = '', receivedFileSize = 0;
+
+        // DOM
+        const serverUrlInput = document.getElementById('serverUrl');
+        const connectServerBtn = document.getElementById('connectServerBtn');
+        const serverStatus = document.getElementById('serverStatus');
+        const roleReceiverBtn = document.getElementById('roleReceiver');
+        const roleSenderBtn = document.getElementById('roleSender');
+        const receiverPanel = document.getElementById('receiverPanel');
+        const senderPanel = document.getElementById('senderPanel');
+        const genOfferBtn = document.getElementById('genOfferBtn');
+        const qrcodeDiv = document.getElementById('qrcode');
+        const iceStateR = document.getElementById('iceStateR');
+        const dcStateR = document.getElementById('dcStateR');
+        const connStateR = document.getElementById('connStateR');
+        const connStateS = document.getElementById('connStateS');
+        const dcStateS = document.getElementById('dcStateS');
+        const startScanBtn = document.getElementById('startScanBtn');
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const scanResult = document.getElementById('scanResult');
+        const fileInput = document.getElementById('fileInput');
+        const sendFileBtn = document.getElementById('sendFileBtn');
+        const pingBtn = document.getElementById('pingBtn');
+        const logBox = document.getElementById('logBox');
+
+        function addLog(msg) {
+            logBox.textContent += msg + '\n';
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+        function clearLog() { logBox.textContent = ''; }
+
+        // 重建SDP
+        function buildSDP(type, ufrag, pwd, fingerprint) {
+            const sessionId = Math.floor(Math.random() * 1e18);
+            return `v=0\r
+o=- ${sessionId} 2 IN IP4 127.0.0.1\r
+s=-\r
+t=0 0\r
+a=group:BUNDLE 0\r
+a=extmap-allow-mixed\r
+a=msid-semantic: WMS\r
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r
+c=IN IP4 0.0.0.0\r
+a=ice-ufrag:${ufrag}\r
+a=ice-pwd:${pwd}\r
+a=ice-options:trickle\r
+a=fingerprint:sha-256 ${fingerprint}\r
+a=setup:${type === 'offer' ? 'actpass' : 'active'}\r
+a=mid:0\r
+a=sctp-port:5000\r
+a=max-message-size:262144\r
+`;
+        }
+
+        function buildICECandidate(ip, port, type, ufrag) {
+            const foundation = Math.floor(Math.random() * 2e9);
+            const priority = (type === 'host') ? (ip.includes(':') ? 2113939711 : 2113937151) : 0;
+            return `candidate:${foundation} 1 udp ${priority} ${ip} ${port} typ ${type} generation 0 ufrag ${ufrag} network-cost 999`;
+        }
+
+        // WebRTC 初始化
+        function createPeerConnection() {
+            if (pc) pc.close();
+            pc = new RTCPeerConnection({ iceServers: [] });
+
+            pc.onconnectionstatechange = () => {
+                const state = pc.connectionState;
+                addLog(`[连接状态] ${state}`);
+                if (role === 'receiver') connStateR.textContent = state;
+                else connStateS.textContent = state;
+                if (state === 'connected') {
+                    sendFileBtn.disabled = false;
+                    pingBtn.disabled = false;
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.close();
+                        addLog('[信令] 直连成功，断开信令');
+                    }
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                addLog(`[ICE连接状态] ${pc.iceConnectionState}`);
+            };
+
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    localCandidates.push(e.candidate);
+                    addLog(`[本地ICE] ${e.candidate.candidate}`);
+                    if (ws && ws.readyState === WebSocket.OPEN && targetId) {
+                        ws.send(JSON.stringify({
+                            type: 'ice',
+                            target: targetId,
+                            payload: e.candidate.candidate   // 直接发送完整字符串
+                        }));
+                    }
+                } else {
+                    addLog('[ICE收集] 完成');
+                    if (role === 'receiver') {
+                        iceStateR.textContent = '✅ 完成';
+                        generateCompressedQR();
+                    }
+                }
+            };
+
+            pc.ondatachannel = (e) => {
+                dc = e.channel;
+                setupDataChannel(dc);
+                if (role === 'receiver') dcStateR.textContent = '🟢 开启';
+                else dcStateS.textContent = '🟢 开启';
+            };
+
+            return pc;
+        }
+
+        function createDataChannel() {
+            dc = pc.createDataChannel('fileTransfer');
+            setupDataChannel(dc);
+        }
+
+        function setupDataChannel(channel) {
+            channel.binaryType = 'arraybuffer';
+            channel.onopen = () => {
+                sendFileBtn.disabled = false;
+                pingBtn.disabled = false;
+                addLog('[数据通道] 已打开');
+            };
+            channel.onclose = () => {
+                sendFileBtn.disabled = true;
+                pingBtn.disabled = true;
+                addLog('[数据通道] 已关闭');
+            };
+            channel.onmessage = (e) => {
+                if (typeof e.data === 'string') {
+                    try {
+                        const msg = JSON.parse(e.data);
+                        if (msg.type === 'file-meta') {
+                            receivedFileName = msg.name;
+                            receivedFileSize = msg.size;
+                            receiveBuffer = [];
+                            addLog(`[传输] 准备接收: ${msg.name} (${(msg.size/1024).toFixed(1)}KB)`);
+                        } else if (msg.type === 'file-end') {
+                            const blob = new Blob(receiveBuffer);
+                            const a = document.createElement('a');
+                            a.href = URL.createObjectURL(blob);
+                            a.download = receivedFileName;
+                            a.click();
+                            URL.revokeObjectURL(a.href);
+                            addLog(`[传输] 接收完成`);
+                        } else if (msg.type === 'ping') {
+                            addLog(`[传输] Ping: ${msg.text}`);
+                            channel.send(JSON.stringify({type:'pong'}));
+                        } else if (msg.type === 'pong') {
+                            addLog(`[传输] Pong`);
+                        }
+                    } catch(ex){}
+                } else if (e.data instanceof ArrayBuffer) {
+                    receiveBuffer.push(e.data);
+                    const got = receiveBuffer.reduce((a,b)=>a+b.byteLength,0);
+                    addLog(`[传输] 接收数据 ${(got/1024).toFixed(1)}/${(receivedFileSize/1024).toFixed(1)} KB`);
+                }
+            };
+        }
+
+        // 接收者：生成Offer
+        async function generateOffer() {
+            createPeerConnection();
+            createDataChannel();
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            addLog('[Offer] 已创建，等待ICE收集...');
+        }
+
+        // 生成压缩二维码（接收者）
+        function generateCompressedQR() {
+            const sdp = pc.localDescription.sdp;
+            const u = sdp.match(/a=ice-ufrag:(.+)/)[1];
+            const p = sdp.match(/a=ice-pwd:(.+)/)[1];
+            const f = sdp.match(/a=fingerprint:sha-256 (.+)/)[1];
+
+            const iceCompact = localCandidates.map(c => {
+                const parts = c.candidate.split(' ');
+                const typIdx = parts.indexOf('typ');
+                return {
+                    ip: parts[typIdx-2],
+                    port: parseInt(parts[typIdx-1]),
+                    type: parts[typIdx+1]
+                };
+            });
+
+            const compressed = { id: myId, u, p, f, ice: iceCompact };
+            const json = JSON.stringify(compressed);
+            addLog('[压缩数据] ' + json);
+
+            QRCode.toCanvas(document.createElement('canvas'), json, { width: 300, margin: 2 }, (err, canvas) => {
+                if (err) return;
+                qrcodeDiv.innerHTML = '';
+                qrcodeDiv.appendChild(canvas);
+                addLog('[二维码] 已生成，大小: ' + json.length + ' 字符');
+            });
+        }
+
+        // 发送者：处理扫描结果
+        async function handleScannedCompressed(compressedStr) {
+            try {
+                const data = JSON.parse(compressedStr);
+                addLog('[扫描解析] 收到压缩包: ' + JSON.stringify(data));
+
+                targetId = data.id;
+                const { u, p, f, ice } = data;
+
+                // 重建Offer SDP
+                const offerSdp = buildSDP('offer', u, p, f);
+                addLog('[重建Offer SDP]\n' + offerSdp);
+
+                createPeerConnection();
+                await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+                addLog('[设置远程Offer] 成功');
+
+                // 添加接收者的ICE候选（从二维码中解析）
+                for (const ic of ice) {
+                    const candStr = buildICECandidate(ic.ip, ic.port, ic.type, u);
+                    addLog('[添加远程ICE] ' + candStr);
+                    await pc.addIceCandidate({ candidate: candStr, sdpMid: '0', sdpMLineIndex: 0 });
+                }
+
+                // 创建Answer
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                addLog('[Answer] 已创建');
+
+                const ansSdp = answer.sdp;
+                const ansU = ansSdp.match(/a=ice-ufrag:(.+)/)[1];
+                const ansP = ansSdp.match(/a=ice-pwd:(.+)/)[1];
+                const ansF = ansSdp.match(/a=fingerprint:sha-256 (.+)/)[1];
+
+                const answerCompressed = { u: ansU, p: ansP, f: ansF, ice: [] };
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'answer', target: targetId, payload: answerCompressed }));
+                    addLog('[信令发] Answer (压缩): ' + JSON.stringify(answerCompressed));
+                }
+            } catch (e) {
+                addLog('[错误] 扫描处理失败: ' + e);
+            }
+        }
+
+        // 接收者：处理远程Offer（发送者发来的，但实际流程中接收者只会收到Answer，不会收到Offer，此函数备用）
+        async function handleRemoteOfferCompressed(compressed) {
+            // 实际流程中接收者不会收到Offer，但保留
+        }
+
+        // 接收者：处理远程Answer（来自发送者）
+        async function handleRemoteAnswerCompressed(compressed) {
+            addLog('[收到压缩Answer] ' + JSON.stringify(compressed));
+            const { u, p, f } = compressed;
+            const answerSdp = buildSDP('answer', u, p, f);
+            addLog('[重建Answer SDP]\n' + answerSdp);
+            try {
+                await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+                addLog('[设置远程Answer] 成功');
+            } catch (e) {
+                addLog('[错误] 设置远程Answer失败: ' + e);
+            }
+        }
+
+        // 双方：处理远程ICE候选（字符串）
+        async function handleRemoteIce(candidateStr) {
+            addLog('[添加远程ICE] ' + candidateStr);
+            try {
+                await pc.addIceCandidate({ candidate: candidateStr, sdpMid: '0', sdpMLineIndex: 0 });
+            } catch (e) {
+                addLog('[错误] 添加ICE失败: ' + e);
+            }
+        }
+
+        // 信令消息处理
+        function handleSignalingMessage(msg) {
+            addLog('[信令收] ' + JSON.stringify(msg));
+            if (msg.type === 'ok') {
+                myId = msg.id;
+                serverStatus.textContent = `🟢 ID:${myId}`;
+                addLog(`[信令] 我的ID: ${myId}`);
+            } else if (msg.type === 'answer' && role === 'receiver') {
+                handleRemoteAnswerCompressed(msg.payload);
+            } else if (msg.type === 'ice') {
+                handleRemoteIce(msg.payload);
+            }
+        }
+
+        function connectSignaling() {
+            const server = serverUrlInput.value.trim();
+            if (!server) return alert('请输入服务器地址');
+            ws = new WebSocket(`ws://${server}`);
+            ws.onopen = () => {
+                serverConnected = true;
+                serverStatus.textContent = '🟢 已连接';
+                addLog('[信令] 连接成功');
+            };
+            ws.onmessage = (e) => handleSignalingMessage(JSON.parse(e.data));
+            ws.onclose = () => {
+                serverConnected = false;
+                serverStatus.textContent = '🔴 断开';
+                addLog('[信令] 断开');
+            };
+            ws.onerror = () => addLog('[信令] 错误');
+        }
+
+        // 扫描
+        let scanning = false;
+        async function startScan() {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                alert('不支持摄像头');
+                return;
+            }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                video.play();
+                scanning = true;
+                scanResult.textContent = '扫描中...';
+                requestAnimationFrame(scanLoop);
+            } catch (e) {
+                alert('摄像头错误: ' + e);
+            }
+        }
+
+        function scanLoop() {
+            if (!scanning) return;
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, canvas.width, canvas.height);
+                if (code) {
+                    scanning = false;
+                    video.srcObject.getTracks().forEach(t => t.stop());
+                    video.style.display = 'none';
+                    scanResult.textContent = '✅ 扫描成功';
+                    addLog('[扫描结果] ' + code.data);
+                    handleScannedCompressed(code.data);
+                    return;
+                }
+            }
+            requestAnimationFrame(scanLoop);
+        }
+
+        function sendFile() {
+            if (!dc || dc.readyState !== 'open') return;
+            const file = fileInput.files[0];
+            if (!file) return;
+            dc.send(JSON.stringify({type:'file-meta', name:file.name, size:file.size}));
+            const chunkSize = 16*1024;
+            let offset = 0;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                dc.send(e.target.result);
+                offset += e.target.result.byteLength;
+                addLog(`[传输] 发送 ${(offset/1024).toFixed(1)}/${(file.size/1024).toFixed(1)} KB`);
+                if (offset < file.size) readNext();
+                else { dc.send(JSON.stringify({type:'file-end'})); addLog('[传输] 发送完成'); }
+            };
+            const readNext = () => reader.readAsArrayBuffer(file.slice(offset, offset+chunkSize));
+            readNext();
+        }
+
+        function ping() {
+            if (dc) dc.send(JSON.stringify({type:'ping', text: new Date().toLocaleTimeString()}));
+        }
+
+        // UI绑定
+        connectServerBtn.onclick = connectSignaling;
+        roleReceiverBtn.onclick = () => {
+            role = 'receiver';
+            receiverPanel.style.display = 'block';
+            senderPanel.style.display = 'none';
+            roleReceiverBtn.classList.add('active');
+            roleSenderBtn.classList.remove('active');
+        };
+        roleSenderBtn.onclick = () => {
+            role = 'sender';
+            receiverPanel.style.display = 'none';
+            senderPanel.style.display = 'block';
+            roleSenderBtn.classList.add('active');
+            roleReceiverBtn.classList.remove('active');
+        };
+        genOfferBtn.onclick = async () => {
+            if (!serverConnected) { alert('请先连接信令服务器'); return; }
+            await generateOffer();
+        };
+        startScanBtn.onclick = startScan;
+        sendFileBtn.onclick = sendFile;
+        pingBtn.onclick = ping;
+
+        clearLog();
+        addLog('🌐 就绪，请连接信令服务器');
+    })();
+</script>
+</body>
+</html>
