@@ -2,271 +2,578 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC 手动信令文件传输</title>
+    <title>WebRTC · IPv6优先 · NAT4预测探测 · 文件传输</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; max-width: 800px; }
-        .panel { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; background-color: #f9f9f9; }
-        textarea { width: 100%; height: 100px; margin-top: 10px; font-family: monospace; }
-        button { padding: 8px 15px; margin-top: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 3px; }
-        button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        #status { font-weight: bold; color: red; }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
+            margin: 20px;
+            max-width: 950px;
+            background: #f5f7fc;
+        }
+        .card {
+            background: white;
+            border-radius: 18px;
+            padding: 24px 28px;
+            margin-bottom: 24px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.04);
+            border: 1px solid #e9ecf2;
+        }
+        h2 {
+            margin-top: 0;
+            font-weight: 600;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .badge {
+            background: #dbeafe;
+            color: #1e4bd2;
+            font-size: 0.8rem;
+            padding: 2px 10px;
+            border-radius: 30px;
+            font-weight: 500;
+        }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        #status {
+            font-weight: 600;
+            padding: 4px 16px;
+            border-radius: 30px;
+            background: #f1f5f9;
+        }
+        .nat-detector {
+            background: #f8fafc;
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin: 18px 0 8px 0;
+            border-left: 5px solid #3b82f6;
+        }
+        .nat-badge {
+            display: inline-block;
+            background: #1e293b;
+            color: white;
+            padding: 4px 14px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        .ipv6-tip {
+            color: #2563eb;
+            font-weight: 500;
+        }
+        textarea {
+            width: 100%;
+            height: 105px;
+            margin-top: 10px;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 13px;
+            padding: 12px;
+            border: 1.5px solid #dce2ec;
+            border-radius: 12px;
+            resize: vertical;
+            background: white;
+        }
+        button {
+            padding: 10px 22px;
+            margin: 8px 10px 8px 0;
+            cursor: pointer;
+            background: #1e4bd2;
+            color: white;
+            border: none;
+            border-radius: 40px;
+            font-weight: 500;
+            font-size: 14px;
+            box-shadow: 0 2px 6px rgba(30,75,210,0.2);
+            transition: all 0.15s;
+            border: 1px solid transparent;
+        }
+        button:hover {
+            background: #103bb5;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 14px rgba(30,75,210,0.25);
+        }
+        button:disabled {
+            background: #cbd5e1;
+            box-shadow: none;
+            color: #64748b;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .outline-btn {
+            background: transparent;
+            color: #1e4bd2;
+            border: 1.5px solid #bdd3ff;
+            box-shadow: none;
+        }
+        .outline-btn:hover {
+            background: #eef4ff;
+            border-color: #1e4bd2;
+        }
+        .file-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        #progress {
+            font-weight: 600;
+            color: #0b3b5e;
+            background: #e0f2fe;
+            padding: 5px 15px;
+            border-radius: 30px;
+        }
+        #download-area a {
+            display: inline-block;
+            margin: 10px 12px 0 0;
+            padding: 8px 18px;
+            background: #f1f5f9;
+            border-radius: 40px;
+            text-decoration: none;
+            color: #1e293b;
+            font-weight: 500;
+            border: 1px solid #d9e2ef;
+        }
+        .candidate-log {
+            max-height: 130px;
+            overflow-y: auto;
+            background: #0b1727;
+            color: #bdd3ff;
+            padding: 10px 16px;
+            border-radius: 14px;
+            font-size: 12px;
+            font-family: monospace;
+            margin-top: 15px;
+        }
     </style>
 </head>
 <body>
 
-    <h2>WebRTC 手动建立连接 & 文件传输测试</h2>
-    <p>当前连接状态: <span id="status">未连接</span></p>
+<h2>
+    ⚡ WebRTC 增强传输
+    <span class="badge">IPv6优先</span>
+    <span class="badge">NAT4预测</span>
+</h2>
 
-    <div class="panel">
-        <h3>步骤 1 & 2: 信令交换区 (SDP + ICE)</h3>
-        <p>1. <b>电脑A (发起方):</b> 点击「创建 Offer」，等待生成完毕后，复制【我的信令数据】发给电脑B。</p>
-        <p>2. <b>电脑B (接收方):</b> 将收到的数据粘贴到【远程信令数据】中，点击「接受并创建 Answer」，然后复制【我的信令数据】发给电脑A。</p>
-        <p>3. <b>电脑A (发起方):</b> 将收到的 Answer 粘贴到【远程信令数据】中，点击「确认 Answer 完成连接」。</p>
-
-        <button id="btn-create-offer">1. [电脑A] 创建 Offer</button>
-        <button id="btn-create-answer">2. [电脑B] 接受并创建 Answer</button>
-        <button id="btn-accept-answer">3. [电脑A] 确认 Answer 完成连接</button>
-
-        <label for="local-signal"><br><br><b>【我的信令数据】(请复制这里的文本发给对方):</b></label>
-        <textarea id="local-signal" readonly placeholder="等待生成..."></textarea>
-
-        <label for="remote-signal"><br><b>【远程信令数据】(请把对方发来的文本粘贴到这里):</b></label>
-        <textarea id="remote-signal" placeholder="在此粘贴对方的信令数据..."></textarea>
+<div class="card">
+    <div class="status-bar">
+        <span style="font-weight:500;">🔌 连接状态:</span>
+        <span id="status">⚪ 未连接</span>
+        <span id="ip-version-hint" style="margin-left:auto; font-size:0.9rem;"></span>
     </div>
 
-    <div class="panel">
-        <h3>步骤 4: 文件传输区</h3>
-        <input type="file" id="file-input" disabled>
-        <button id="btn-send-file" disabled>发送文件</button>
-        <p>传输进度: <span id="progress">0%</span></p>
-        <div id="download-area"></div>
+    <!-- NAT 类型探测器 (实时分析) -->
+    <div class="nat-detector">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span style="font-weight:700;">🧬 NAT 探测结果</span>
+            <span id="nat-type-display" class="nat-badge" style="background:#334155;">等待ICE收集</span>
+            <span id="nat-suggestion" style="color:#475569; font-size:0.9rem;"></span>
+        </div>
+        <div id="ipv6-candidates-hint" style="margin-top:10px; font-size:0.9rem;"></div>
+        <!-- 候选日志简略展示 -->
+        <div id="candidate-summary" class="candidate-log">🔍 ICE候选将在此显示 (host/srflx/relay/prflx)</div>
+    </div>
+</div>
+
+<!-- 信令交换区 (手动) -->
+<div class="card">
+    <h3>📡 手动信令交换 (SDP + ICE)</h3>
+    <p style="margin-top:0; color:#475569;">❶ 电脑A (发起方) → ❷ 电脑B (接收方) → ❸ 电脑A确认</p>
+    <div>
+        <button id="btn-create-offer">❶ [A] 创建 Offer</button>
+        <button id="btn-create-answer">❷ [B] 接受并创建 Answer</button>
+        <button id="btn-accept-answer">❸ [A] 确认 Answer</button>
+        <button id="btn-copy-local" class="outline-btn" style="margin-left:16px;">📋 复制我的信令</button>
     </div>
 
-    <script>
-        // DOM 元素
+    <label style="font-weight:500; margin-top:20px; display:block;">📤 我的信令数据 (复制发给对方):</label>
+    <textarea id="local-signal" readonly placeholder="点击上方按钮生成……"></textarea>
+
+    <label style="font-weight:500; margin-top:15px; display:block;">📥 远程信令数据 (粘贴对方发来的):</label>
+    <textarea id="remote-signal" placeholder="粘贴对方信令……"></textarea>
+</div>
+
+<!-- 文件传输 -->
+<div class="card">
+    <h3>📎 文件传输 (DataChannel)</h3>
+    <div class="file-section">
+        <input type="file" id="file-input" disabled style="padding:8px; border-radius:30px; border:1px solid #cbd5e1;">
+        <button id="btn-send-file" disabled>⬆️ 发送文件</button>
+        <span id="progress">0%</span>
+    </div>
+    <div id="download-area" style="margin-top:20px;"></div>
+</div>
+
+<script>
+    (function(){
+        "use strict";
+
+        // ----- 界面元素 -----
         const UI = {
             btnOffer: document.getElementById('btn-create-offer'),
             btnAnswer: document.getElementById('btn-create-answer'),
             btnAccept: document.getElementById('btn-accept-answer'),
+            btnCopy: document.getElementById('btn-copy-local'),
             localSignal: document.getElementById('local-signal'),
             remoteSignal: document.getElementById('remote-signal'),
             status: document.getElementById('status'),
             fileInput: document.getElementById('file-input'),
             btnSendFile: document.getElementById('btn-send-file'),
             progress: document.getElementById('progress'),
-            downloadArea: document.getElementById('download-area')
+            downloadArea: document.getElementById('download-area'),
+            natTypeDisplay: document.getElementById('nat-type-display'),
+            natSuggestion: document.getElementById('nat-suggestion'),
+            candidateSummary: document.getElementById('candidate-summary'),
+            ipv6Hint: document.getElementById('ipv6-candidates-hint'),
+            ipVersionHint: document.getElementById('ip-version-hint')
         };
 
-        let pc; // RTCPeerConnection 实例
-        let dataChannel; // RTCDataChannel 实例
-
-        // 文件接收相关的变量
+        // ----- 全局变量 -----
+        let pc = null;                     // RTCPeerConnection
+        let dataChannel = null;
         let receiveBuffer = [];
         let receivedSize = 0;
         let incomingFileInfo = null;
 
-        // 配置 WebRTC (使用 Google 免费的 STUN 服务器进行 NAT 穿透)
+        // NAT 探测相关数据
+        let collectedCandidates = [];       // 存储 RTCIceCandidate 信息
+        let natTypeResult = '未知';
+        let candidateLogLines = [];
+
+        // ----- 针对 IPv6 优化 & NAT4预测 的 ICE 配置 -----
+        // 使用多个 STUN 服务器，包含 IPv6 地址，并设置 iceTransportPolicy 为 'all' (默认)，
+        // 同时通过 iceCandidatePoolSize 提前收集候选。
         const rtcConfig = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
-            ]
+                // 优先 IPv6 STUN (Google 公共 IPv6)
+                { urls: 'stun:[2001:4860:4860::8888]:19302' },
+                { urls: 'stun:[2001:4860:4860::8844]:19302' },
+                // IPv4 STUN 作为后备
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                // 可选的 TURN 服务器 (如果你的应用需要强制穿透对称NAT，可在此配置)
+                // 为了演示 NAT 预测，暂不配置 TURN，以便观察对称型 NAT 的直连困难。
+            ],
+            iceCandidatePoolSize: 8,           // 提前收集候选，加速连接
+            iceTransportPolicy: 'all',          // 允许所有类型候选 (包括relay，但我们没配turn所以只有host/srflx)
+            // 以下非标准但有用的配置 (部分浏览器支持)
+            // 开启 IPv6 优先: 通过候选排序策略，浏览器默认优先 IPv6 (若支持)
         };
 
-        // 初始化 PeerConnection
+        // ----- 辅助: 更新候选摘要 & NAT 探测 -----
+        function addCandidateLog(candidateStr, type, address, port, relatedAddress) {
+            const time = new Date().toLocaleTimeString();
+            let line = `[${time}] ${type.padEnd(6)} ${address}:${port}`;
+            if (relatedAddress) line += ` (rel: ${relatedAddress})`;
+            candidateLogLines.push(line);
+            if (candidateLogLines.length > 7) candidateLogLines.shift();
+            UI.candidateSummary.innerText = candidateLogLines.join('\n');
+        }
+
+        // 核心: NAT类型分析 (基于收集的候选)
+        function analyzeNatType() {
+            const hostCands = collectedCandidates.filter(c => c.type === 'host');
+            const srflxCands = collectedCandidates.filter(c => c.type === 'srflx');
+            const relayCands = collectedCandidates.filter(c => c.type === 'relay');
+            
+            let natType = '未知';
+            let suggestion = '';
+
+            // 基本判断逻辑 (根据 RFC 3489 / 现代行为)
+            const hasIPv4Host = hostCands.some(c => c.address && c.address.includes('.') && !c.address.startsWith('['));
+            const hasIPv6Host = hostCands.some(c => c.address && c.address.includes(':') && !c.address.includes('.')); 
+            const hasSrflx = srflxCands.length > 0;
+            const hasRelay = relayCands.length > 0;
+
+            // 优先IPv6显示
+            const ipv6Host = hostCands.find(c => c.address.includes(':'));
+            const ipv4Host = hostCands.find(c => c.address.includes('.'));
+            UI.ipv6Hint.innerText = hasIPv6Host ? `✅ 检测到IPv6 host候选 (${ipv6Host.address}) —— 可能直连` : '⚠️ 未检测到IPv6 host候选，使用IPv4。';
+            UI.ipVersionHint.innerText = hasIPv6Host ? '🌐 IPv6 就绪' : '📟 IPv4 模式';
+
+            // NAT类型粗略判定:
+            if (!hasSrflx && hostCands.length > 0) {
+                // 如果没有srflx候选但存在host候选，可能直接是公网IP (或者防火墙阻塞了STUN)
+                natType = '公网IP / 无NAT (或UDP阻塞)';
+                suggestion = '极佳连通性，但需确保防火墙放行。';
+            } else if (hasSrflx) {
+                // 存在 srflx (server reflexive) 说明有NAT
+                // 进一步判断对称性: 通过收集到的 srflx 映射地址和端口模式。
+                // 简单规则: 如果所有srflx的端口都与本地端口不同，且可能存在多个不同映射(不同目标?) 
+                // 但在单次收集中难以完全判定对称性，我们使用保守启发:
+                // 如果有多个srflx候选且端口各不相同 => 可能对称型
+                const srflxPorts = srflxCands.map(c => c.port);
+                const uniquePorts = [...new Set(srflxPorts)];
+                
+                if (uniquePorts.length > 1) {
+                    natType = '对称型 NAT (Symmetric) —— NAT4';
+                    suggestion = '⚠️ 直连困难，强烈建议配置 TURN 服务器。';
+                } else {
+                    // 单个映射端口: 可能是锥形
+                    // 再检查host候选个数等，粗略认为受限锥形/端口受限锥形
+                    natType = '锥形 NAT (Full/Restricted/Port-Restricted)';
+                    suggestion = '✅ 大概率可直连 (仍需对方打洞)。';
+                }
+            } else if (hasRelay) {
+                natType = '使用中继 (TURN)';
+                suggestion = '连接经过中继，延迟较高。';
+            } else {
+                natType = '未知 (候选不足)';
+                suggestion = '请确保网络允许UDP，尝试刷新。';
+            }
+
+            // 特别强调对称型NAT
+            if (natType.includes('对称')) {
+                UI.natTypeDisplay.style.background = '#b91c1c';
+                UI.natTypeDisplay.innerText = '🔴 NAT4 (对称型)';
+                UI.natSuggestion.innerText = '检测到对称型NAT，P2P打洞可能失败，建议使用TURN。';
+            } else {
+                UI.natTypeDisplay.style.background = '#0f3b5e';
+                UI.natTypeDisplay.innerText = natType;
+                UI.natSuggestion.innerText = suggestion;
+            }
+
+            // 额外IPv6优化提醒
+            if (hasIPv6Host) {
+                UI.ipv6Hint.innerHTML = `✅ IPv6 host候选 (${ipv6Host.address}) —— 直连概率极高。`;
+            } else {
+                UI.ipv6Hint.innerHTML = `⚠️ 未发现IPv6 host候选，使用IPv4 STUN穿透。`;
+            }
+        }
+
+        // 监听 ICE 候选 (核心探测点)
+        function handleIceCandidate(event) {
+            if (!event.candidate) {
+                // 候选收集完毕
+                console.log('【ICE】所有候选收集结束。最终SDP已包含全部候选。');
+                analyzeNatType(); 
+                // 此时 localDescription 已完备
+                if (pc && pc.localDescription) {
+                    UI.localSignal.value = JSON.stringify(pc.localDescription);
+                }
+                return;
+            }
+            
+            const cand = event.candidate;
+            const candidateStr = cand.candidate;
+            // 解析候选信息 (使用浏览器原生解析)
+            let type = 'unknown';
+            let address = '';
+            let port = '';
+            let relatedAddress = '';
+            
+            if (candidateStr) {
+                const parts = candidateStr.split(' ');
+                // 格式: candidate:... 1 udp 2130706431 192.168.1.2 54321 typ host ...
+                for (let i=0; i<parts.length; i++) {
+                    if (parts[i] === 'typ') {
+                        type = parts[i+1];
+                    }
+                }
+                // 地址与端口通常在倒数第四、三位置 (视具体格式)
+                const len = parts.length;
+                if (len >= 5) {
+                    address = parts[len-5];
+                    port = parts[len-4];
+                }
+                // 查找 raddr / rport (相关地址)
+                const raddrIndex = parts.indexOf('raddr');
+                if (raddrIndex !== -1) relatedAddress = parts[raddrIndex+1];
+            }
+            
+            // 存储结构化信息
+            collectedCandidates.push({
+                type: type,
+                address: address,
+                port: port,
+                candidate: candidateStr,
+                relatedAddress: relatedAddress || ''
+            });
+            
+            addCandidateLog(candidateStr, type, address, port, relatedAddress);
+            
+            // 实时更新UI (粗略)
+            if (type === 'srflx') {
+                UI.natTypeDisplay.innerText = '检测到 NAT (锥形/对称待定)';
+            }
+            console.log(`【ICE候选】${type} ${address}:${port}`, cand);
+        }
+
+        // ----- 初始化 PeerConnection (增强)-----
         function initPeerConnection() {
-            console.log("【WebRTC】正在初始化 RTCPeerConnection...");
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            collectedCandidates = [];
+            candidateLogLines = [];
+            UI.candidateSummary.innerText = '🔄 开始收集 ICE 候选...';
+            UI.natTypeDisplay.innerText = '收集中';
+            UI.natTypeDisplay.style.background = '#334155';
+            
+            console.log('【WebRTC】初始化 (IPv6优先配置)');
             pc = new RTCPeerConnection(rtcConfig);
 
-            // 监听 ICE 候选者收集
-            pc.onicecandidate = event => {
-                if (event.candidate) {
-                    console.log("【ICE】发现新的候选者 (网络路径):", event.candidate.candidate);
-                } else {
-                    // 当 candidate 为 null 时，表示所有候选者收集完毕
-                    console.log("【ICE】所有候选者收集完毕！此时 LocalDescription 已包含所有网络路径。");
-                    UI.localSignal.value = JSON.stringify(pc.localDescription);
-                    alert("信令生成完毕，请复制【我的信令数据】！");
-                }
-            };
+            pc.onicecandidate = handleIceCandidate;
 
-            // 监听连接状态变化
             pc.onconnectionstatechange = () => {
-                console.log("【状态】Connection State 变为:", pc.connectionState);
+                console.log('connectionState:', pc.connectionState);
                 if (pc.connectionState === 'connected') {
-                    UI.status.textContent = '已连接 ✅';
-                    UI.status.style.color = 'green';
+                    UI.status.innerHTML = '✅ 已连接 (P2P)';
+                    UI.status.style.color = '#0b7e3b';
+                    UI.status.style.background = '#e0f7e6';
                     UI.fileInput.disabled = false;
                     UI.btnSendFile.disabled = false;
                 } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                    UI.status.textContent = '连接断开 ❌';
-                    UI.status.style.color = 'red';
+                    UI.status.innerHTML = '❌ 断开/失败';
+                    UI.status.style.background = '#fee2e2';
+                    UI.status.style.color = '#b91c1c';
+                } else {
+                    UI.status.innerHTML = `⏳ ${pc.connectionState}`;
                 }
             };
 
-            // 监听 ICE 状态变化 (用于调试 NAT 穿透)
             pc.oniceconnectionstatechange = () => {
-                console.log("【状态】ICE Connection State 变为:", pc.iceConnectionState);
+                console.log('iceConnectionState:', pc.iceConnectionState);
+                // 当ICE连接状态变为 checking / connected 时也可以分析
             };
 
-            // 【作为接收方】监听远端创建的 DataChannel
-            pc.ondatachannel = event => {
-                console.log("【DataChannel】接收到远端创建的数据通道:", event.channel.label);
+            // 接收远端 DataChannel
+            pc.ondatachannel = (event) => {
+                console.log('收到远端 DataChannel:', event.channel.label);
                 setupDataChannel(event.channel);
             };
         }
 
-        // 配置 DataChannel 事件
+        // ----- DataChannel 设置 -----
         function setupDataChannel(channel) {
             dataChannel = channel;
-            dataChannel.binaryType = 'arraybuffer'; // 接收二进制数据
-
-            dataChannel.onopen = () => {
-                console.log("【DataChannel】通道已开启！可以发送数据了。");
-            };
-
-            dataChannel.onclose = () => {
-                console.log("【DataChannel】通道已关闭。");
-            };
-
-            dataChannel.onmessage = event => {
-                // 1. 如果收到的是字符串，说明是文件元数据 (Meta Info)
+            dataChannel.binaryType = 'arraybuffer';
+            
+            dataChannel.onopen = () => console.log('DataChannel 开启');
+            dataChannel.onclose = () => console.log('DataChannel 关闭');
+            dataChannel.onmessage = (event) => {
                 if (typeof event.data === 'string') {
                     incomingFileInfo = JSON.parse(event.data);
-                    console.log(`【接收文件】收到文件信息: ${incomingFileInfo.name} (${incomingFileInfo.size} bytes)`);
+                    console.log(`接收文件: ${incomingFileInfo.name} (${incomingFileInfo.size} bytes)`);
                     receiveBuffer = [];
                     receivedSize = 0;
-                    UI.progress.textContent = "准备接收...";
-                } 
-                // 2. 如果收到的是 ArrayBuffer，说明是文件分片数据
-                else if (event.data instanceof ArrayBuffer) {
+                    UI.progress.textContent = '准备接收...';
+                } else if (event.data instanceof ArrayBuffer) {
                     receiveBuffer.push(event.data);
                     receivedSize += event.data.byteLength;
-                    
-                    const progressPercent = ((receivedSize / incomingFileInfo.size) * 100).toFixed(1);
-                    UI.progress.textContent = `接收中: ${progressPercent}%`;
-
-                    // 判断是否接收完毕
+                    const percent = ((receivedSize / incomingFileInfo.size)*100).toFixed(1);
+                    UI.progress.textContent = `📥 ${percent}%`;
                     if (receivedSize === incomingFileInfo.size) {
-                        console.log("【接收文件】文件接收完成！正在生成下载链接...");
                         const blob = new Blob(receiveBuffer);
-                        const downloadUrl = URL.createObjectURL(blob);
-                        
+                        const url = URL.createObjectURL(blob);
                         const link = document.createElement('a');
-                        link.href = downloadUrl;
+                        link.href = url;
                         link.download = incomingFileInfo.name;
-                        link.textContent = `点击下载: ${incomingFileInfo.name}`;
-                        link.style.display = 'block';
+                        link.textContent = `⬇️ 下载 ${incomingFileInfo.name}`;
                         UI.downloadArea.appendChild(link);
-                        
-                        UI.progress.textContent = "接收完成 ✅";
-                        incomingFileInfo = null; // 重置
+                        UI.progress.textContent = '✅ 接收完成';
+                        incomingFileInfo = null;
                     }
                 }
             };
         }
 
-        // [电脑A] 操作 1: 创建 Offer
+        // ----- 手动信令操作 -----
         UI.btnOffer.onclick = async () => {
             initPeerConnection();
-            
-            console.log("【电脑A】正在创建 DataChannel (标签名: fileTransfer)...");
+            // 创建 DataChannel (发起方)
             const channel = pc.createDataChannel('fileTransfer');
             setupDataChannel(channel);
-
-            console.log("【电脑A】正在生成 Offer...");
+            
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            console.log("【电脑A】已设置 LocalDescription，正在等待 ICE 收集...");
-            UI.localSignal.value = "正在收集网络路径，请稍候...";
+            UI.localSignal.value = '⏳ 正在收集 ICE 候选，请稍候...';
         };
 
-        // [电脑B] 操作 2: 接受 Offer 并创建 Answer
         UI.btnAnswer.onclick = async () => {
-            const remoteStr = UI.remoteSignal.value;
-            if (!remoteStr) return alert("请先粘贴电脑A的信令数据！");
-
+            const remoteStr = UI.remoteSignal.value.trim();
+            if (!remoteStr) return alert('请粘贴发起方的信令');
             initPeerConnection();
-
             const offerDesc = JSON.parse(remoteStr);
-            console.log("【电脑B】解析到远端 Offer，正在设置 RemoteDescription...");
             await pc.setRemoteDescription(offerDesc);
-
-            console.log("【电脑B】正在生成 Answer...");
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            console.log("【电脑B】已设置 LocalDescription，正在等待 ICE 收集...");
-            UI.localSignal.value = "正在收集网络路径，请稍候...";
+            UI.localSignal.value = '⏳ 正在收集 ICE 候选，请稍候...';
         };
 
-        // [电脑A] 操作 3: 接受 Answer 完成连接
         UI.btnAccept.onclick = async () => {
-            const remoteStr = UI.remoteSignal.value;
-            if (!remoteStr) return alert("请先粘贴电脑B的信令数据！");
-
+            const remoteStr = UI.remoteSignal.value.trim();
+            if (!remoteStr) return alert('请粘贴应答方的信令');
             const answerDesc = JSON.parse(remoteStr);
-            console.log("【电脑A】解析到远端 Answer，正在设置 RemoteDescription...");
             await pc.setRemoteDescription(answerDesc);
-            console.log("【电脑A】信令握手完成！等待 P2P 打洞连接...");
+            console.log('信令握手完成');
         };
 
-        // 发送文件逻辑
+        // 复制信令
+        UI.btnCopy.onclick = () => {
+            if (!UI.localSignal.value || UI.localSignal.value.includes('请稍候')) {
+                alert('信令尚未生成完毕');
+                return;
+            }
+            UI.localSignal.select();
+            document.execCommand('copy');
+            alert('信令已复制到剪贴板');
+        };
+
+        // ----- 文件发送 (带背压控制) -----
         UI.btnSendFile.onclick = () => {
             const file = UI.fileInput.files[0];
-            if (!file) return alert("请先选择一个文件！");
-
-            console.log(`【发送文件】准备发送: ${file.name}, 大小: ${file.size} bytes`);
+            if (!file) return alert('选择文件');
+            if (!dataChannel || dataChannel.readyState !== 'open') {
+                alert('DataChannel 未就绪');
+                return;
+            }
+            dataChannel.send(JSON.stringify({name: file.name, size: file.size}));
             
-            // 1. 发送文件元数据
-            dataChannel.send(JSON.stringify({
-                name: file.name,
-                size: file.size
-            }));
-
-            // 2. 分片读取并发送文件 (16KB 每块)
-            const chunkSize = 16384; 
+            const CHUNK = 16384;
             let offset = 0;
-            const fileReader = new FileReader();
-
-            // 定义读取分片的函数
-            const readNextChunk = () => {
-                const slice = file.slice(offset, offset + chunkSize);
-                fileReader.readAsArrayBuffer(slice);
+            const reader = new FileReader();
+            
+            const sendChunk = () => {
+                const slice = file.slice(offset, offset + CHUNK);
+                reader.readAsArrayBuffer(slice);
             };
-
-            fileReader.onload = (e) => {
-                // 检查 DataChannel 缓冲区，防止发送过快导致底层崩溃
-                // 如果缓冲区超过限制 (例如 64KB)，则稍作等待后再试
-                if (dataChannel.bufferedAmount > 65535) {
-                    setTimeout(() => {
-                        // 使用 setTimeout 重新触发 onLoad 里的发送逻辑
-                        fileReader.onload(e); 
-                    }, 50);
+            
+            reader.onload = (e) => {
+                // 背压控制: 缓冲区过大时等待
+                if (dataChannel.bufferedAmount > 1024 * 1024) { // 1MB
+                    setTimeout(() => reader.onload(e), 30);
                     return;
                 }
-
-                // 发送数据块
                 dataChannel.send(e.target.result);
                 offset += e.target.result.byteLength;
-                
-                const progressPercent = ((offset / file.size) * 100).toFixed(1);
-                UI.progress.textContent = `发送中: ${progressPercent}%`;
-
-                // 如果未发完，继续读取下一块
+                const percent = ((offset / file.size)*100).toFixed(1);
+                UI.progress.textContent = `📤 ${percent}%`;
                 if (offset < file.size) {
-                    readNextChunk();
+                    sendChunk();
                 } else {
-                    console.log("【发送文件】所有数据块发送完毕！");
-                    UI.progress.textContent = "发送完成 ✅";
+                    UI.progress.textContent = '✅ 发送完成';
                 }
             };
-
-            fileReader.onerror = error => console.error("读取文件出错:", error);
-
-            // 启动第一次读取
-            readNextChunk();
+            reader.onerror = (err) => console.error(err);
+            sendChunk();
         };
 
-    </script>
+        // 辅助: 当localDescription最终确定后更新文本框 (已在onicecandidate完成时处理)
+        // 额外监听 icegatheringstatechange
+        // 通过劫持 setLocalDescription 的完成也可，但现有逻辑已经利用 null candidate 事件。
+
+        // 初始化一些提示
+        window.onload = () => {
+            console.log('WebRTC 增强版 - IPv6优先 & NAT4预测');
+        };
+    })();
+</script>
 </body>
 </html>
