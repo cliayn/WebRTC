@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -c js/qr-scan.js)",
+      "Bash(node -c js/radar-detect.js)"
+    ]
+  }
+}
