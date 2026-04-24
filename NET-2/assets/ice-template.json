@@ -1,0 +1,67 @@
+{
+  "description": "WebRTC ICE候选模板配置文件",
+  "usage": "用于生成和解析ICE候选信息",
+  "candidateTypes": {
+    "host": "本地主机候选",
+    "srflx": "服务器反射候选（通过NAT）",
+    "prflx": "对等反射候选",
+    "relay": "中继候选（通过TURN服务器）"
+  },
+  "template": {
+    "fullFormat": {
+      "example": "candidate:1234567890 1 udp 2113937151 192.168.1.100 54321 typ host generation 0 ufrag a1b2c3d4 network-cost 999",
+      "fields": {
+        "foundation": "基础标识符，随机整数",
+        "componentId": "组件ID，通常为1",
+        "transport": "传输协议，通常为'udp'",
+        "priority": "优先级，根据候选类型变化",
+        "ip": "IP地址",
+        "port": "端口号",
+        "type": "候选类型: host/srflx/prflx/relay",
+        "generation": "生成标识，通常为0",
+        "ufrag": "ICE用户名片段，与SDP中的ufrag匹配",
+        "network-cost": "网络成本，通常为999"
+      }
+    },
+    "compactFormat": {
+      "example": {
+        "ip": "192.168.1.100",
+        "port": 54321,
+        "type": "host"
+      },
+      "description": "压缩格式，用于二维码传输",
+      "fields": {
+        "ip": "IP地址",
+        "port": "端口号",
+        "type": "候选类型"
+      }
+    },
+    "priorityValues": {
+      "host": {
+        "ipv4": 2113937151,
+        "ipv6": 2113939711
+      },
+      "srflx": 1694498815,
+      "prflx": 100,
+      "relay": 0
+    }
+  },
+  "examples": {
+    "hostCandidateIPv4": {
+      "full": "candidate:1234567890 1 udp 2113937151 192.168.1.100 54321 typ host generation 0 ufrag a1b2c3d4 network-cost 999",
+      "compact": {
+        "ip": "192.168.1.100",
+        "port": 54321,
+        "type": "host"
+      }
+    },
+    "srflxCandidate": {
+      "full": "candidate:9876543210 1 udp 1694498815 203.0.113.5 55000 typ srflx generation 0 ufrag a1b2c3d4 network-cost 999",
+      "compact": {
+        "ip": "203.0.113.5",
+        "port": 55000,
+        "type": "srflx"
+      }
+    }
+  }
+}

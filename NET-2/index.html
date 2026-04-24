@@ -6,6 +6,7 @@
     <title>内网直传 · 专业修复版</title>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -24,6 +25,21 @@
             <span>📡 STUN</span>
             <input type="text" id="stunServer" value="stun:stun.l.google.com:19302" placeholder="stun:stun.l.google.com:19302">
             <button class="btn" id="applyStunBtn" style="padding:10px;">应用</button>
+        </div>
+        <div class="room-config">
+            <span>🚪 房间号</span>
+            <input type="text" id="roomIdInput" placeholder="输入房间号，留空则按连接IP匹配">
+            <button class="btn" id="applyRoomIdBtn" style="padding:10px;">加入</button>
+        </div>
+        <div class="burst-config">
+            <span>💥 爆破范围</span>
+            <input type="text" id="burstRangeInput" value="192.168.43.1" placeholder="例: 192.168.1-255.1">
+            <button class="btn" id="applyBurstRangeBtn" style="padding:10px;">应用</button>
+        </div>
+        <div class="regex-config">
+            <span>🔍 NAT检测正则</span>
+            <div id="regexPatternList"></div>
+            <button class="btn" id="addRegexPatternBtn" style="margin-top:8px; padding:8px; font-size:0.85rem;">+ 添加正则</button>
         </div>
         <div class="log-box" id="logBox">📋 日志区域...</div>
     </div>
@@ -125,6 +141,11 @@
     </div>
 </div>
 
+<script src="js/config.js"></script>
+<script src="js/predict-internal.js"></script>
+<script src="js/qr-scan.js"></script>
+<script src="js/radar-detect.js"></script>
+<script src="js/transfer.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

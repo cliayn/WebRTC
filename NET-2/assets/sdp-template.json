@@ -1,0 +1,35 @@
+{
+  "description": "WebRTC SDP模板配置文件",
+  "usage": "用于生成SDP描述，包含ICE认证信息和加密指纹",
+  "templates": {
+    "offer": {
+      "example": {
+        "type": "offer",
+        "ufrag": "a1b2c3d4",
+        "pwd": "e5f6g7h8i9j0k1l2m3n4",
+        "fingerprint": "01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF",
+        "sessionId": 123456789012345678,
+        "setup": "actpass"
+      },
+      "fields": {
+        "type": "SDP类型: 'offer' 或 'answer'",
+        "ufrag": "ICE用户名片段，随机字符串",
+        "pwd": "ICE密码，随机字符串",
+        "fingerprint": "DTLS指纹，SHA-256哈希",
+        "sessionId": "会话ID，随机大整数",
+        "setup": "DTLS设置: 'actpass'(offer) 或 'active'(answer)"
+      }
+    },
+    "answer": {
+      "example": {
+        "type": "answer",
+        "ufrag": "x9y8z7w6",
+        "pwd": "v5u4t3s2r1q0p9o8n7m6",
+        "fingerprint": "FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10",
+        "sessionId": 987654321098765432,
+        "setup": "active"
+      }
+    }
+  },
+  "sdpFormat": "v=0\\r\\no=- {sessionId} 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=extmap-allow-mixed\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=ice-ufrag:{ufrag}\\r\\na=ice-pwd:{pwd}\\r\\na=ice-options:trickle\\r\\na=fingerprint:sha-256 {fingerprint}\\r\\na=setup:{setup}\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n"
+}
