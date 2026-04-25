@@ -104,6 +104,14 @@ async function handleScannedCompressed(compressedStr) {
             return;
         }
 
+        // 重置运营商NAT状态，避免旧连接干扰
+        gatewayBurstAttempted = false;
+        carrierNatHandlingStage = 0;
+        carrierNatDetectedIp = null;
+        carrierNatRealTimeDetectionTriggered = false;
+        carrierNatReplacementMap = {};
+        connectionFailureCount = 0;
+
         targetId = data.id;
         role = 'sender';
         const { u, p, f, ice } = data;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
@@ -10,31 +10,78 @@
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div class="app-container" id="mainContainer">
-    <div class="advanced-btn" id="advancedBtn">⚙️</div>
 
-    <!-- 高级面板 -->
+<div class="ui-container" id="mainApp">
+
+    <!-- ====== 顶部栏：房间号 + 设置 ====== -->
+    <div class="top-bar">
+        <div class="room-input-container">
+            <input type="text" id="roomIdInput" placeholder="房间号（留空按IP匹配）" maxlength="20">
+            <div class="room-status" id="radarStatus">INITIALIZING...</div>
+        </div>
+        <div class="settings-btn" id="advancedBtn" title="高级设置">⚙</div>
+    </div>
+
+    <!-- ====== 中心显示区域（雷达 / 二维码） ====== -->
+    <div class="center-display" id="centerDisplay">
+        <!-- 雷达层 -->
+        <div class="radar-layer" id="radarLayer">
+            <div class="radar-sweep"></div>
+            <svg viewBox="0 0 400 400" class="radar-svg">
+                <circle cx="200" cy="200" r="180" fill="none" stroke="rgba(0,243,255,0.3)" stroke-width="1" stroke-dasharray="5,5"/>
+                <circle cx="200" cy="200" r="120" fill="none" stroke="rgba(0,243,255,0.2)" stroke-width="1" stroke-dasharray="5,5"/>
+                <circle cx="200" cy="200" r="60" fill="none" stroke="rgba(0,243,255,0.15)" stroke-width="1" stroke-dasharray="5,5"/>
+                <circle cx="200" cy="200" r="24" fill="#0d9488" stroke="#00F3FF" stroke-width="3"/>
+                <text x="200" y="206" text-anchor="middle" fill="white" font-size="14" font-weight="bold" id="myIdDisplay">---</text>
+                <g id="peersGroup"></g>
+            </svg>
+        </div>
+        <!-- 二维码展示 -->
+        <div class="big-qr-box" id="qrBox">
+            <div id="qrcode" class="qr-code-inner"></div>
+            <div class="qr-info">
+                <span>ICE: <span id="iceStateR">等待</span></span>
+                <span style="margin-left:16px;">连接: <span id="connStateR">新</span></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 右侧控制按钮 ====== -->
+    <div class="right-controls">
+        <!-- 扫码按钮 -->
+        <div class="control-widget" id="scanBtn">
+            <svg viewBox="0 0 1024 1024"><path d="M708.775642 131.306558l179.428555 0 0 179.428555c0 18.584264 15.069207 33.643238 33.643238 33.643238s33.643238-15.057951 33.643238-33.643238L955.490673 131.306558c0-43.280736-24.00574-67.285452-67.285452-67.285452L708.775642 64.021106c-18.574031 0-33.643238 15.057951-33.643238 33.643238S690.202635 131.306558 708.775642 131.306558z"></path><path d="M91.989087 344.378351c18.584264 0 33.643238-15.069207 33.643238-33.643238L125.632325 131.306558l187.838086 0c18.584264 0 33.643238-15.069207 33.643238-33.643238s-15.057951-33.643238-33.643238-33.643238L134.040832 64.020082c-43.280736 0-75.694983 24.00574-75.694983 67.285452l0 179.428555C58.34585 329.309144 73.4038 344.378351 91.989087 344.378351z"></path><path d="M921.848459 680.80766c-18.574031 0-33.643238 15.057951-33.643238 33.643238l0 179.429579L708.775642 893.880477c-18.574031 0-33.643238 15.057951-33.643238 33.643238s15.069207 33.643238 33.643238 33.643238l179.428555 0c43.280736 0 67.285452-24.00574 67.285452-67.285452L955.48965 714.450898C955.490673 695.866634 940.421466 680.80766 921.848459 680.80766z"></path><path d="M313.470411 893.879454l-187.838086 0L125.632325 714.450898c0-18.574031-15.057951-33.643238-33.643238-33.643238s-33.643238 15.069207-33.643238 33.643238l0 179.429579c0 43.280736 32.41527 67.285452 75.694983 67.285452l179.429579 0c18.584264 0 33.643238-15.069207 33.643238-33.643238S332.054675 893.879454 313.470411 893.879454z"></path><path d="M955.490673 490.164692 58.34585 490.164692c-18.574031 0-33.643238 15.057951-33.643238 33.643238 0 18.584264 15.069207 33.643238 33.643238 33.643238l897.145847 0c18.574031 0 33.643238-15.057951 33.643238-33.643238C989.133911 505.222643 974.064704 490.164692 955.490673 490.164692z"></path></svg>
+            <span class="widget-label">SCAN</span>
+        </div>
+        <!-- 切换按钮（雷达↔二维码） -->
+        <div class="control-widget toggle-btn" id="toggleDisplayBtn">
+            <div id="iconQr">
+                <svg viewBox="0 0 1024 1024"><path d="M384 64l-249.6 0c-51.2 0-89.6 41.6-89.6 89.6l0 227.2c0 51.2 41.6 89.6 89.6 89.6l249.6 0c51.2 0 89.6-41.6 89.6-89.6l0-227.2C473.6 105.6 435.2 64 384 64zM428.8 380.8c0 25.6-19.2 44.8-44.8 44.8l-249.6 0c-25.6 0-44.8-19.2-44.8-44.8l0-227.2c0-25.6 19.2-44.8 44.8-44.8l249.6 0c25.6 0 44.8 19.2 44.8 44.8L428.8 380.8z"></path><path d="M192 192l134.4 0 0 134.4-134.4 0 0-134.4Z"></path><path d="M377.6 544l-243.2 0c-48 0-86.4 38.4-86.4 89.6l0 220.8c0 48 38.4 89.6 86.4 89.6l243.2 0c48 0 86.4-38.4 86.4-89.6l0-220.8C467.2 582.4 425.6 544 377.6 544zM422.4 851.2c0 25.6-19.2 44.8-44.8 44.8l-243.2 0c-25.6 0-44.8-19.2-44.8-44.8l0-220.8c0-25.6 19.2-44.8 44.8-44.8l243.2 0c25.6 0 44.8 19.2 44.8 44.8L422.4 851.2z"></path><path d="M192 668.8l131.2 0 0 131.2-131.2 0 0-131.2Z"></path><path d="M633.6 470.4l249.6 0c51.2 0 89.6-41.6 89.6-89.6l0-227.2c0-51.2-41.6-89.6-89.6-89.6l-249.6 0c-51.2 0-89.6 41.6-89.6 89.6l0 227.2C544 432 585.6 470.4 633.6 470.4zM588.8 153.6c0-25.6 19.2-44.8 44.8-44.8l249.6 0c25.6 0 44.8 19.2 44.8 44.8l0 227.2c0 25.6-19.2 44.8-44.8 44.8l-249.6 0c-25.6 0-44.8-19.2-44.8-44.8L588.8 153.6z"></path><path d="M700.8 192l134.4 0 0 134.4-134.4 0 0-134.4Z"></path><path d="M572.8 716.8l137.6 0c12.8 0 22.4-9.6 22.4-22.4l0-137.6c0-12.8-9.6-22.4-22.4-22.4l-137.6 0c-12.8 0-22.4 9.6-22.4 22.4l0 137.6C550.4 707.2 560 716.8 572.8 716.8z"></path><path d="M886.4 563.2l0 38.4c0 12.8 12.8 25.6 25.6 25.6l38.4 0c12.8 0 25.6-12.8 25.6-25.6l0-38.4c0-12.8-12.8-25.6-25.6-25.6l-38.4 0C899.2 537.6 886.4 547.2 886.4 563.2z"></path><path d="M582.4 944l48 0c12.8 0 22.4-9.6 22.4-22.4l0-48c0-12.8-9.6-22.4-22.4-22.4l-48 0c-12.8 0-22.4 9.6-22.4 22.4l0 48C560 934.4 569.6 944 582.4 944z"></path><path d="M944 704l-99.2 0c-16 0-28.8 12.8-28.8 28.8l0 44.8-48 0c-19.2 0-32 12.8-32 32l0 99.2c0 16 12.8 28.8 28.8 28.8l179.2 3.2c16 0 28.8-12.8 28.8-28.8l0-179.2C972.8 716.8 960 704 944 704z"></path></svg>
+            </div>
+            <div id="iconRadar" style="display:none">
+                <svg viewBox="0 0 1024 1024"><path d="M512 64C264.8 64 64 264.8 64 512s200.8 448 448 448 448-200.8 448-448S759.2 64 512 64z m-16 831.2c-199.2-8-359.2-168.8-367.2-367.2h128C264.8 656.8 368 759.2 496 767.2v128z m0-192c-92.8-8-167.2-82.4-175.2-175.2h129.6c5.6 22.4 23.2 40 45.6 45.6v129.6z m0-252.8c-22.4 5.6-39.2 23.2-45.6 45.6H320.8c8-92.8 82.4-167.2 175.2-175.2v129.6z m0-193.6C367.2 264.8 264.8 368 256.8 496h-128c8-199.2 168.8-359.2 367.2-367.2v128z m32 64c17.6 1.6 34.4 5.6 49.6 11.2 4.8-22.4 17.6-41.6 35.2-55.2-26.4-11.2-55.2-18.4-84.8-20.8V128c92 4 176 40 240 97.6L722.4 272c8.8 5.6 17.6 12.8 24 21.6l44.8-44.8c61.6 64.8 100.8 152 104.8 247.2H768c-1.6-29.6-8.8-58.4-20-84.8-13.6 17.6-32.8 30.4-55.2 35.2 5.6 16 9.6 32 11.2 49.6H574.4c-2.4-8-5.6-14.4-10.4-20.8l47.2-47.2c-8-6.4-15.2-15.2-21.6-24l-50.4 50.4c-4-1.6-7.2-3.2-12-4V320.8z m0 253.6c22.4-5.6 40.8-23.2 46.4-46.4h128.8c-8 92.8-82.4 167.2-175.2 175.2V574.4z m0 320.8v-128C656.8 759.2 759.2 656 767.2 528h128c-8 199.2-168 359.2-367.2 367.2z m143.2-478.4c-35.2 0-64-28.8-64-64s28.8-64 64-64 64 28.8 64 64-28.8 64-64 64z"></path></svg>
+            </div>
+            <span class="widget-label" id="toggleLabel">QR CODE</span>
+        </div>
+    </div>
+
+    <!-- ====== 高级设置面板 ====== -->
     <div class="advanced-panel" id="advancedPanel">
         <h3>🔧 高级设置</h3>
         <div class="server-config">
             <span>🌐 信令</span>
-            <input type="text" id="serverUrl" value="192.168.43.15:8800" placeholder="IP:端口">
-            <button class="btn" id="applyServerBtn" style="padding:10px;">应用</button>
+            <input type="text" id="serverUrl" placeholder="IP:端口">
+            <button class="btn" id="applyServerBtn">应用</button>
         </div>
         <div class="stun-config">
             <span>📡 STUN</span>
-            <input type="text" id="stunServer" value="stun:stun.l.google.com:19302" placeholder="stun:stun.l.google.com:19302">
-            <button class="btn" id="applyStunBtn" style="padding:10px;">应用</button>
-        </div>
-        <div class="room-config">
-            <span>🚪 房间号</span>
-            <input type="text" id="roomIdInput" placeholder="输入房间号，留空则按连接IP匹配">
-            <button class="btn" id="applyRoomIdBtn" style="padding:10px;">加入</button>
+            <input type="text" id="stunServer" placeholder="stun:stun.l.google.com:19302">
+            <button class="btn" id="applyStunBtn">应用</button>
         </div>
         <div class="burst-config">
             <span>💥 爆破范围</span>
-            <input type="text" id="burstRangeInput" value="192.168.43.1" placeholder="例: 192.168.1-255.1">
-            <button class="btn" id="applyBurstRangeBtn" style="padding:10px;">应用</button>
+            <input type="text" id="burstRangeInput" placeholder="例: 192.168.1-255.1">
+            <button class="btn" id="applyBurstRangeBtn">应用</button>
         </div>
         <div class="regex-config">
             <span>🔍 NAT检测正则</span>
@@ -44,101 +91,47 @@
         <div class="log-box" id="logBox">📋 日志区域...</div>
     </div>
 
-    <!-- 主界面 -->
-    <h1>📡 内网直传</h1>
-    <div class="main-actions">
-        <div class="action-card" id="qrQuickCard">
-            <div class="icon">📷</div>
-            <h3>二维码快速连接</h3>
-            <p>生成/扫描二维码</p>
+    <!-- ====== 扫码界面（摄像头覆盖层） ====== -->
+    <div class="scan-overlay" id="scanSection" style="display:none;">
+        <div class="scan-overlay-header">
+            <span>📸 二维码扫描</span>
+            <button class="btn-close" id="cancelScanBtn">✕</button>
         </div>
-        <div class="action-card" id="radarCard">
-            <div class="icon">🛜</div>
-            <h3>内网自动探查</h3>
-            <p>雷达式发现设备</p>
-        </div>
-    </div>
-
-    <!-- 二维码快速连接面板 -->
-    <div class="qr-quick-panel" id="qrQuickPanel">
-        <h3>选择操作</h3>
-        <div class="btn-row">
-            <button class="btn btn-primary" id="showGenOfferBtn">🎯 生成 Offer 二维码</button>
-            <button class="btn btn-primary" id="showScanBtn">📸 扫描二维码</button>
-        </div>
-        <button class="btn" id="closeQrPanelBtn" style="margin-top:16px;">返回</button>
-    </div>
-
-    <!-- 生成二维码界面 -->
-    <div id="genOfferSection" style="display:none;">
-        <div style="margin:20px 0;">
-            <button class="btn btn-primary" id="genOfferBtn">🔄 刷新二维码</button>
-        </div>
-        <div id="qrcode"></div>
-        <div class="status-badge">ICE: <span id="iceStateR">等待</span> · 连接: <span id="connStateR">新</span></div>
-        <button class="btn" id="cancelGenOfferBtn">返回</button>
-    </div>
-
-    <!-- 扫描二维码界面 -->
-    <div id="scanSection" style="display:none;">
-        <button class="btn btn-primary" id="startScanBtn" style="width:100%; margin:20px 0;">📸 开启摄像头扫描</button>
         <video id="video" autoplay playsinline style="display:none;"></video>
         <canvas id="canvas" style="display:none;"></canvas>
-        <div id="scanResult" style="color:#a5f3fc; margin:10px 0;">等待扫描...</div>
-        <button class="btn" id="cancelScanBtn">返回</button>
+        <div class="scan-status" id="scanResult">等待扫描...</div>
     </div>
-</div>
 
-<!-- 雷达界面 -->
-<div class="radar-view" id="radarView">
-    <div class="radar-header" style="display:flex; justify-content:space-between; padding:10px 0;">
-        <button class="btn" id="closeRadarBtn" style="padding:8px 20px;">← 返回</button>
-        <span>🛜 网络雷达</span>
-        <span style="width:60px;"></span>
-    </div>
-    <div class="radar-container">
-        <svg viewBox="0 0 400 400" class="radar-svg" id="radarSvg">
-            <circle cx="200" cy="200" r="180" fill="none" stroke="#1e3a5f" stroke-width="1" stroke-dasharray="5,5"/>
-            <circle cx="200" cy="200" r="120" fill="none" stroke="#1e3a5f" stroke-width="1" stroke-dasharray="5,5"/>
-            <circle cx="200" cy="200" r="60" fill="none" stroke="#1e3a5f" stroke-width="1" stroke-dasharray="5,5"/>
-            <circle cx="200" cy="200" r="24" fill="#2563eb" stroke="#60a5fa" stroke-width="3"/>
-            <text x="200" y="206" text-anchor="middle" fill="white" font-size="14" font-weight="bold" id="myIdDisplay">---</text>
-            <g id="peersGroup"></g>
-        </svg>
-    </div>
-    <div class="radar-footer" style="padding:20px; text-align:center;">
-        <p id="radarStatus">正在探查网络...</p>
-    </div>
-</div>
-
-<!-- 传输助手 -->
-<div class="transfer-assistant" id="transferAssistant">
-    <div class="transfer-header">
-        <button class="btn" id="closeTransferBtn" style="padding:8px 16px;">←</button>
-        <h2>📁 文件传输助手</h2>
-        <span id="peerIdDisplay"></span>
-    </div>
-    <div class="transfer-messages" id="messageList">
-        <div class="message-bubble">✨ 连接已建立，可以发送文件和消息</div>
-    </div>
-    <div class="transfer-input-area">
-        <label class="file-label" for="fileInput">📎</label>
-        <input type="file" id="fileInput" style="display:none;">
-        <input type="text" id="messageInput" placeholder="输入消息..." autocomplete="off">
-        <button class="btn btn-primary" id="sendMessageBtn" style="padding:14px 24px;">发送</button>
-    </div>
-</div>
-
-<!-- 通用模态框 -->
-<div class="modal-overlay hidden" id="modalOverlay">
-    <div class="modal-box">
-        <h3 id="modalTitle">提示</h3>
-        <p id="modalMessage"></p>
-        <div class="btn-row" style="margin-top:20px;">
-            <button class="btn" id="modalCancelBtn">取消</button>
-            <button class="btn btn-primary" id="modalConfirmBtn">确定</button>
+    <!-- ====== 传输助手 ====== -->
+    <div class="transfer-assistant" id="transferAssistant">
+        <div class="transfer-header">
+            <button class="btn" id="closeTransferBtn" style="padding:8px 16px;">←</button>
+            <h2>📁 文件传输助手</h2>
+            <span id="peerIdDisplay"></span>
+        </div>
+        <div class="transfer-messages" id="messageList">
+            <div class="message-bubble">✨ 连接已建立，可以发送文件和消息</div>
+        </div>
+        <div class="transfer-input-area">
+            <label class="file-label" for="fileInput">📎</label>
+            <input type="file" id="fileInput" style="display:none;">
+            <input type="text" id="messageInput" placeholder="输入消息..." autocomplete="off">
+            <button class="btn btn-primary" id="sendMessageBtn" style="padding:14px 24px;">发送</button>
         </div>
     </div>
+
+    <!-- ====== 通用模态框 ====== -->
+    <div class="modal-overlay hidden" id="modalOverlay">
+        <div class="modal-box">
+            <h3 id="modalTitle">提示</h3>
+            <p id="modalMessage"></p>
+            <div class="btn-row" style="margin-top:20px;">
+                <button class="btn" id="modalCancelBtn">取消</button>
+                <button class="btn btn-primary" id="modalConfirmBtn">确定</button>
+            </div>
+        </div>
+    </div>
+
 </div>
 
 <script src="js/config.js"></script>

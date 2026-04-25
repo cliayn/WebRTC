@@ -13,7 +13,6 @@ stunServerInput = document.getElementById('stunServer');
 applyStunBtn = document.getElementById('applyStunBtn');
 roomIdInput = document.getElementById('roomIdInput');
 applyRoomIdBtn = document.getElementById('applyRoomIdBtn');
-if (!applyRoomIdBtn) console.error('applyRoomIdBtn not found');
 if (!roomIdInput) console.error('roomIdInput not found');
 burstRangeInput = document.getElementById('burstRangeInput');
 applyBurstRangeBtn = document.getElementById('applyBurstRangeBtn');
@@ -23,7 +22,7 @@ logBox = document.getElementById('logBox');
 qrQuickPanel = document.getElementById('qrQuickPanel');
 genOfferSection = document.getElementById('genOfferSection');
 scanSection = document.getElementById('scanSection');
-radarView = document.getElementById('radarView');
+var centerDisplay = document.getElementById('centerDisplay');
 transferAssistant = document.getElementById('transferAssistant');
 myIdDisplay = document.getElementById('myIdDisplay');
 peersGroup = document.getElementById('peersGroup');
@@ -41,6 +40,11 @@ modalConfirmBtn = document.getElementById('modalConfirmBtn');
 sendMessageBtn = document.getElementById('sendMessageBtn');
 
 // modalResolve 已在 config.js 中声明
+
+// 从config.js初始化高级设置输入框
+serverUrlInput.value = serverUrl;
+stunServerInput.value = stunServer;
+burstRangeInput.value = gatewayBurstRange;
 
 function showModal(title, message) {
     modalTitle.textContent = title;
@@ -105,10 +109,8 @@ function handleSignalingMessage(msg) {
         myId = msg.id;
         if (myIdDisplay) myIdDisplay.textContent = myId;
         addLog(`[信令] 我的ID: ${myId}`);
-        if (radarView.style.display === 'flex') {
-            // 连接后发送房间号信息
-            ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
-        }
+        // 雷达模式始终开启，连接后发送房间号信息
+        ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
     } else if (msg.type === 'same_network_clients') {
         peerNodes = msg.clients;
         updateRadarPeers(); // 在radar-detect.js中定义
@@ -271,7 +273,7 @@ function createPeerConnection() {
             }
         } else {
             addLog('[ICE收集] 完成');
-            if (role === 'receiver' && genOfferSection.style.display === 'block') {
+            if (role === 'receiver' && centerDisplay && centerDisplay.classList.contains('show-qr')) {
                 generateCompressedQR(); // 在qr-scan.js中定义
             }
         }
@@ -499,7 +501,19 @@ async function handleRemoteIce(candidateStr) {
 }
 
 // ---------- UI 绑定 ----------
-advancedBtn.onclick = () => advancedPanel.classList.toggle('show');
+advancedBtn.onclick = (e) => {
+    e.stopPropagation();
+    advancedPanel.classList.toggle('show');
+};
+// 点击高级面板外部区域关闭面板
+document.addEventListener('click', function(e) {
+    if (advancedPanel.classList.contains('show') &&
+        !advancedPanel.contains(e.target) &&
+        e.target !== advancedBtn &&
+        !advancedBtn.contains(e.target)) {
+        advancedPanel.classList.remove('show');
+    }
+});
 applyServerBtn.onclick = () => {
     serverUrl = serverUrlInput.value.trim();
     addLog(`信令服务器: ${serverUrl}`);
@@ -508,29 +522,27 @@ applyStunBtn.onclick = () => {
     stunServer = stunServerInput.value.trim();
     addLog(`STUN服务器: ${stunServer}`);
 };
-applyRoomIdBtn.onclick = () => {
-    console.log('applyRoomIdBtn clicked');
-    if (!roomIdInput) {
-        console.error('roomIdInput not found');
-        return;
-    }
+// 房间号输入自动应用：失去焦点或按回车时更新
+roomIdInput.onchange = function() {
     const value = roomIdInput.value.trim();
-    roomId = value; // 更新房间号（空字符串表示无房间号）
+    roomId = value;
     if (value) {
         addLog(`房间号已设置为: ${value}`);
-        // 如果雷达模式正在运行且已连接信令，立即更新房间信息
-        if (radarView.style.display === 'flex' && ws && ws.readyState === WebSocket.OPEN) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
             addLog('[雷达] 房间信息已更新');
         }
     } else {
         addLog('已清除房间号，将按连接IP匹配');
-        // 如果雷达模式正在运行且已连接信令，重新发送（无房间号）
-        if (radarView.style.display === 'flex' && ws && ws.readyState === WebSocket.OPEN) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: '' } }));
             addLog('[雷达] 房间信息已更新（无房间号，按IP匹配）');
         }
     }
+};
+// 回车键也触发
+roomIdInput.onkeypress = function(e) {
+    if (e.key === 'Enter') roomIdInput.onchange();
 };
 
 applyBurstRangeBtn.onclick = () => {
@@ -543,104 +555,71 @@ applyBurstRangeBtn.onclick = () => {
     }
 };
 
-document.getElementById('qrQuickCard').onclick = () => {
-    qrQuickPanel.style.display = 'block';
-    genOfferSection.style.display = 'none';
-    scanSection.style.display = 'none';
-};
-document.getElementById('closeQrPanelBtn').onclick = () => {
-    qrQuickPanel.style.display = 'none';
-};
+// ====== 新UI绑定 ======
 
-document.getElementById('showGenOfferBtn').onclick = async () => {
-    qrQuickPanel.style.display = 'none';
-    genOfferSection.style.display = 'block';
-    role = 'receiver';
+var toggleDisplayBtn = document.getElementById('toggleDisplayBtn');
+var scanBtn = document.getElementById('scanBtn');
+var iconQr = document.getElementById('iconQr');
+var iconRadar = document.getElementById('iconRadar');
+var toggleLabel = document.getElementById('toggleLabel');
+var isQrMode = false;
 
-    try {
-        // 第一阶段：连接信令
-        addLog('[系统] 正在尝试连接信令服务器...');
-        await connectSignaling();
-        
-        // 第二阶段：生成 WebRTC Offer
-        addLog('[系统] 信令就绪，正在生成 WebRTC Offer...');
-        qrcodeDiv.innerHTML = '';
-        await generateOffer();
-        
-        addLog('[系统] Offer 生成完毕，二维码已就绪');
+// 切换雷达/二维码显示
+toggleDisplayBtn.onclick = async function() {
+    if (isQrMode) {
+        // 切换到雷达模式
+        centerDisplay.classList.remove('show-qr');
+        iconQr.style.display = 'block';
+        iconRadar.style.display = 'none';
+        toggleLabel.textContent = 'QR CODE';
+        isQrMode = false;
+        addLog('[显示] 切换到雷达模式');
+    } else {
+        // 切换到二维码模式
+        centerDisplay.classList.add('show-qr');
+        iconQr.style.display = 'none';
+        iconRadar.style.display = 'block';
+        toggleLabel.textContent = 'RADAR';
+        isQrMode = true;
+        role = 'receiver';
+        addLog('[显示] 切换到二维码模式');
 
-    } catch (e) {
-        console.error("捕获到错误:", e);
-        
-        // 判断错误来源并给出具体提示
-        if (e.message && e.message.includes('timeout')) {
-            alert('信令连接超时，请检查网络或服务器地址');
-        } else if (!serverConnected) {
-            alert('连接信令服务器失败，请检查高级设置中的 URL');
-        } else {
-            // 如果走到这里，说明 connectSignaling 过了，是 generateOffer 挂了
-            alert('WebRTC 逻辑出错：' + (e.message || e || '未知错误'));
+        // 自动连接信令并生成Offer
+        try {
+            if (!serverConnected) {
+                addLog('[系统] 正在连接信令服务器...');
+                await connectSignaling();
+            }
+            addLog('[系统] 正在生成 WebRTC Offer...');
+            qrcodeDiv.innerHTML = '';
+            await generateOffer();
+            addLog('[系统] 二维码已就绪');
+        } catch (e) {
+            console.error('QR生成错误:', e);
+            if (!serverConnected) {
+                alert('连接信令服务器失败，请检查高级设置中的 URL');
+            } else {
+                alert('WebRTC 逻辑出错：' + (e.message || e || '未知错误'));
+            }
         }
     }
 };
 
-document.getElementById('showScanBtn').onclick = () => {
-    qrQuickPanel.style.display = 'none';
-    scanSection.style.display = 'block';
+// 扫码按钮
+scanBtn.onclick = function() {
+    scanSection.style.display = 'flex';
+    startScan();
 };
 
-document.getElementById('genOfferBtn').onclick = async () => {
-    qrcodeDiv.innerHTML = '';
-    await generateOffer();
-};
-
-document.getElementById('cancelGenOfferBtn').onclick = () => {
-    genOfferSection.style.display = 'none';
-    if (pc) pc.close();
-};
-
-document.getElementById('startScanBtn').onclick = startScan; // 在qr-scan.js中定义
-document.getElementById('cancelScanBtn').onclick = () => {
+// 关闭扫码覆盖层
+document.getElementById('cancelScanBtn').onclick = function() {
     scanSection.style.display = 'none';
     scanningActive = false;
-    const video = document.getElementById('video');
-    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+    var video = document.getElementById('video');
+    if (video && video.srcObject) video.srcObject.getTracks().forEach(function(t) { t.stop(); });
 };
 
-document.getElementById('radarCard').onclick = async () => {
-    addLog('[系统] 正在启动雷达探测模式...');
-    
-    try {
-        // 1. 确保信令已连接（雷达模式通常依赖信令）
-        if (typeof connectSignaling === 'function') {
-            addLog('[系统] 正在检查信令连接...');
-            await connectSignaling();
-        }
-
-        // 2. 执行雷达核心逻辑
-        addLog('[雷达] 正在扫描周边设备...');
-        await startRadarMode(); 
-        
-        addLog('[成功] 雷达模式已激活');
-
-    } catch(e) {
-        // 打印详细错误到控制台，方便你按 F12 查看具体堆栈
-        console.error('Radar Mode Error:', e);
-        
-        // 将具体错误通过日志显示在界面上
-        addLog(`[错误] 雷达启动失败: ${e.message || e}`);
-        
-        // 弹出提示
-        alert('连接失败，请检查信令服务器状态\n错误信息：' + (e.message || e));
-    }
-};
-
-document.getElementById('closeRadarBtn').onclick = () => {
-    radarView.style.display = 'none';
-    if (ws) ws.close();
-};
-
-document.getElementById('closeTransferBtn').onclick = () => {
+document.getElementById('closeTransferBtn').onclick = function() {
     transferAssistant.style.display = 'none';
     if (pc) pc.close();
 };
@@ -656,6 +635,12 @@ fileInput.onchange = (e) => {
 // 第1次失败 → 问用户要IP → 第2次失败 → 提示更改高级设置
 async function attemptGatewayBurstOnFailure() {
     if (!carrierNatDetectionEnabled) return;
+
+    // 连接已成功，不再干扰用户
+    if (pc && (pc.connectionState === 'connected' || pc.connectionState === 'completed')) {
+        addLog('[运营商NAT] 连接已成功，跳过失败处理');
+        return;
+    }
 
     // 如果已在处理中且没有更多阶段，跳过
     if (gatewayBurstAttempted && carrierNatHandlingStage === 0) {
@@ -849,5 +834,18 @@ setTimeout(function() {
 }, 100);
 
 clearLog();
-addLog('🌐 就绪，点击功能卡片开始');
+addLog('🌐 系统就绪，自动启动雷达探测...');
+
+// ====== 自动启动雷达探测 ======
+setTimeout(async function() {
+    try {
+        addLog('[系统] 正在自动连接信令服务器...');
+        await startRadarMode();
+        addLog('[成功] 雷达模式已激活');
+    } catch(e) {
+        console.error('雷达自动启动失败:', e);
+        addLog('[错误] 雷达启动失败: ' + (e.message || e));
+        radarStatus.textContent = '连接失败';
+    }
+}, 200);
 })();

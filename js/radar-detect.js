@@ -5,7 +5,7 @@
 
 // 开始雷达模式
 async function startRadarMode() {
-    radarView.style.display = 'flex';
+    // 雷达始终可见，无需设置display
 
     // 显示房间号信息
     if (roomId) {
