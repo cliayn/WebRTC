@@ -21,7 +21,7 @@ var receivedFileName = '';  // 接收的文件名
 var receivedFileSize = 0;   // 接收的文件大小
 
 // ========== 信令服务器配置 ==========
-var serverUrl = "192.168.43.15:8800";      // 信令服务器地址
+var serverUrl = "rtc.cliayn.top/party/default";      // 信令服务器地址
 var stunServer = "stun:stun.l.google.com:19302"; // STUN服务器地址
 var serverConnected = false;                // 信令连接状态
 

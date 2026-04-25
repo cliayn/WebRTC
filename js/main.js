@@ -81,7 +81,7 @@ function connectSignaling() {
         ws.close();
     }
     return new Promise((resolve, reject) => {
-        ws = new WebSocket(`ws://${serverUrl}`);
+        ws = new WebSocket(`wss://${serverUrl}`);
         ws.onopen = () => {
             serverConnected = true;
             addLog('[信令] 连接成功');

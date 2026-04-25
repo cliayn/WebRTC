@@ -178,7 +178,7 @@ class SignalingServer:
 async def main(host, port):
     server = SignalingServer()
     async with serve(server.handler, host, port):
-        logging.info(f"信令服务器运行在 ws://{host}:{port}")
+        logging.info(f"信令服务器运行在 wss://{host}:{port}")
         await asyncio.Future()
 
 if __name__ == "__main__":
