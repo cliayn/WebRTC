@@ -3,13 +3,17 @@
 
 // ========== WebRTC连接状态 ==========
 var ws = null;              // WebSocket信令连接
-var pc = null;              // RTCPeerConnection对象
-var dc = null;              // RTCDataChannel对象
+var pc = null;              // 当前激活的RTCPeerConnection对象
+var dc = null;              // 当前激活的RTCDataChannel对象
+
+// ========== 多连接管理 ==========
+var connections = {};       // { peerId: { pc, dc, role, messages, targetId, container } }
+var activePeerId = null;    // 当前选中的侧边栏peerId（null = 首页）
 
 // ========== 用户身份和连接目标 ==========
 var myId = null;            // 当前用户ID（由信令服务器分配）
-var targetId = null;        // 目标用户ID（连接对象）
-var role = null;            // 角色：'receiver'(主动方) 或 'sender'(被动方)
+var targetId = null;        // 当前激活的目标用户ID
+var role = null;            // 当前激活的角色：'receiver'(主动方) 或 'sender'(被动方)
 
 // ========== ICE候选和SDP信息 ==========
 var localCandidates = [];   // 本地收集的ICE候选
@@ -46,25 +50,18 @@ var applyStunBtn = null;
 var roomIdInput = null;
 var applyRoomIdBtn = null;
 var logBox = null;
-var qrQuickPanel = null;
-var genOfferSection = null;
 var scanSection = null;
-var radarView = null;
-var transferAssistant = null;
 var myIdDisplay = null;
 var peersGroup = null;
 var radarStatus = null;
-var messageList = null;
-var messageInput = null;
-var fileInput = null;
-var peerIdDisplay = null;
+var sidebarItems = null;     // 侧边栏用户列表容器
+var scanSection = null;
 var qrcodeDiv = null;
 var modalOverlay = null;
 var modalTitle = null;
 var modalMessage = null;
 var modalCancelBtn = null;
 var modalConfirmBtn = null;
-var sendMessageBtn = null;
 
 // ========== 爆破范围配置DOM元素 ==========
 var burstRangeInput = null;

@@ -114,6 +114,10 @@ async function handleScannedCompressed(compressedStr) {
 
         targetId = data.id;
         role = 'sender';
+        // 创建连接条目，使扫码连接也显示在侧边栏
+        if (window.createConnectionEntry) {
+            window.createConnectionEntry(targetId, role);
+        }
         const { u, p, f, ice } = data;
         const offerSdp = buildSDP('offer', u, p, f);
         createPeerConnection();

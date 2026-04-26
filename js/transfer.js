@@ -1,13 +1,16 @@
 // 传输功能模块（连接成功后发送文本和文件）
 // 依赖的全局变量：dc, targetId, receiveBuffer, receivedFileName, receivedFileSize
-// 依赖的DOM元素：transferAssistant, peerIdDisplay, messageList, messageInput, fileInput
+// 注意：多连接模式下，setupDataChannelForPeer (main.js) 会覆盖此文件的handler
+// 此文件的函数仅用于兼容旧流程和过渡期
 
-// 设置数据通道
+// 设置数据通道（会被 setupDataChannelForPeer 覆盖）
 function setupDataChannel(channel) {
     channel.binaryType = 'arraybuffer';
     channel.onopen = () => {
         addLog('[数据通道] 已打开');
-        addMessage('system', '数据通道已建立');
+        if (typeof messageList !== 'undefined' && messageList) {
+            addMessage('system', '数据通道已建立');
+        }
     };
     channel.onclose = () => addLog('[数据通道] 关闭');
     channel.onmessage = (e) => {
@@ -18,7 +21,9 @@ function setupDataChannel(channel) {
                     receivedFileName = msg.name;
                     receivedFileSize = msg.size;
                     receiveBuffer = [];
-                    addMessage('system', `准备接收: ${msg.name}`);
+                    if (typeof messageList !== 'undefined' && messageList) {
+                        addMessage('system', `准备接收: ${msg.name}`);
+                    }
                 } else if (msg.type === 'file-end') {
                     const blob = new Blob(receiveBuffer);
                     const a = document.createElement('a');
@@ -26,9 +31,13 @@ function setupDataChannel(channel) {
                     a.download = receivedFileName;
                     a.click();
                     URL.revokeObjectURL(a.href);
-                    addMessage('system', `接收完成`);
+                    if (typeof messageList !== 'undefined' && messageList) {
+                        addMessage('system', `接收完成`);
+                    }
                 } else if (msg.type === 'chat') {
-                    addMessage('peer', msg.text);
+                    if (typeof messageList !== 'undefined' && messageList) {
+                        addMessage('peer', msg.text);
+                    }
                 }
             } catch(ex){}
         } else if (e.data instanceof ArrayBuffer) {
@@ -43,32 +52,42 @@ function createDataChannel() {
     setupDataChannel(dc);
 }
 
-// 显示传输助手界面
+// 显示传输助手界面（旧版兼容）
 function showTransferAssistant() {
-    transferAssistant.style.display = 'flex';
-    peerIdDisplay.textContent = `与 ${targetId || '对方'} 连接中`;
+    // 不再使用全局 transferAssistant，多连接模式使用 peerTabs
+    if (typeof transferAssistant !== 'undefined' && transferAssistant) {
+        transferAssistant.style.display = 'flex';
+        if (typeof peerIdDisplay !== 'undefined' && peerIdDisplay) {
+            peerIdDisplay.textContent = `与 ${targetId || '对方'} 连接中`;
+        }
+    }
 }
 
-// 添加消息到消息列表
+// 添加消息到消息列表（旧版兼容，多连接模式使用 addPeerMessage）
 function addMessage(sender, text) {
+    var ml = (typeof messageList !== 'undefined') ? messageList : null;
+    if (!ml) return;
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble' + (sender === 'self' ? ' self' : '');
     bubble.textContent = text;
-    messageList.appendChild(bubble);
-    messageList.scrollTop = messageList.scrollHeight;
+    ml.appendChild(bubble);
+    ml.scrollTop = ml.scrollHeight;
 }
 
-// 发送聊天消息
+// 发送聊天消息（旧版兼容，会被 main.js 的版本覆盖）
 function sendChatMessage() {
-    const text = messageInput.value.trim();
+    var mi = (typeof messageInput !== 'undefined') ? messageInput : null;
+    if (!mi) return;
+    const text = mi.value.trim();
     if (!text || !dc || dc.readyState !== 'open') return;
     dc.send(JSON.stringify({ type: 'chat', text }));
     addMessage('self', text);
-    messageInput.value = '';
+    mi.value = '';
 }
 
-// 发送文件
+// 发送文件（旧版兼容，会被 main.js 的版本覆盖）
 function sendFile(file) {
+    var fi = (typeof fileInput !== 'undefined') ? fileInput : null;
     if (!dc || dc.readyState !== 'open') return;
     dc.send(JSON.stringify({type:'file-meta', name:file.name, size:file.size}));
     const chunkSize = 16*1024;

@@ -19,25 +19,18 @@ applyBurstRangeBtn = document.getElementById('applyBurstRangeBtn');
 regexPatternContainer = document.getElementById('regexPatternList');
 addRegexPatternBtn = document.getElementById('addRegexPatternBtn');
 logBox = document.getElementById('logBox');
-qrQuickPanel = document.getElementById('qrQuickPanel');
-genOfferSection = document.getElementById('genOfferSection');
-scanSection = document.getElementById('scanSection');
 var centerDisplay = document.getElementById('centerDisplay');
-transferAssistant = document.getElementById('transferAssistant');
 myIdDisplay = document.getElementById('myIdDisplay');
 peersGroup = document.getElementById('peersGroup');
 radarStatus = document.getElementById('radarStatus');
-messageList = document.getElementById('messageList');
-messageInput = document.getElementById('messageInput');
-fileInput = document.getElementById('fileInput');
-peerIdDisplay = document.getElementById('peerIdDisplay');
+scanSection = document.getElementById('scanSection');
 qrcodeDiv = document.getElementById('qrcode');
+sidebarItems = document.getElementById('sidebarItems');
 modalOverlay = document.getElementById('modalOverlay');
 modalTitle = document.getElementById('modalTitle');
 modalMessage = document.getElementById('modalMessage');
 modalCancelBtn = document.getElementById('modalCancelBtn');
 modalConfirmBtn = document.getElementById('modalConfirmBtn');
-sendMessageBtn = document.getElementById('sendMessageBtn');
 
 // modalResolve 已在 config.js 中声明
 
@@ -45,6 +38,418 @@ sendMessageBtn = document.getElementById('sendMessageBtn');
 serverUrlInput.value = serverUrl;
 stunServerInput.value = stunServer;
 burstRangeInput.value = gatewayBurstRange;
+
+// ====== 多连接管理 ======
+
+function createConnectionEntry(peerId, roleType) {
+    if (connections[peerId]) {
+        if (connections[peerId].pc) connections[peerId].pc.close();
+        delete connections[peerId];
+    }
+    var entry = { pc: null, dc: null, role: roleType, targetId: peerId, connected: false, messages: [] };
+    connections[peerId] = entry;
+    return entry;
+}
+
+function getActiveConnection() {
+    if (activePeerId && connections[activePeerId]) return connections[activePeerId];
+    return null;
+}
+
+function syncGlobalsToActive() {
+    var conn = getActiveConnection();
+    if (conn) {
+        pc = conn.pc;
+        dc = conn.dc;
+        targetId = conn.targetId;
+        role = conn.role;
+    } else {
+        pc = null;
+        dc = null;
+        targetId = null;
+        role = null;
+    }
+}
+
+function switchToHome() {
+    // 隐藏所有对等聊天界面
+    var tabs = document.getElementById('peerTabs');
+    if (tabs) {
+        var activeTabs = tabs.querySelectorAll('.peer-chat-container.active');
+        for (var i = 0; i < activeTabs.length; i++) activeTabs[i].classList.remove('active');
+    }
+    // 显示雷达视图
+    var viewRadar = document.getElementById('view-radar');
+    if (viewRadar) viewRadar.classList.add('active-view');
+
+    // 更新侧边栏激活状态
+    var items = document.querySelectorAll('#sidebarItems .nav-item');
+    for (var i = 0; i < items.length; i++) items[i].classList.remove('active-nav');
+    var homeItem = document.getElementById('homeSidebarItem');
+    if (homeItem) homeItem.classList.add('active-nav');
+
+    activePeerId = null;
+    pc = null; dc = null; targetId = null; role = null;
+
+    addLog('[导航] 切换到首页');
+    // 重新连接信令
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        startRadarMode().catch(function(e) {
+            addLog('[错误] 首页重连失败: ' + e);
+        });
+    }
+}
+
+function switchToPeer(peerId) {
+    var conn = connections[peerId];
+    if (!conn) { addLog('[错误] 切换失败: 连接 ' + peerId + ' 不存在'); return; }
+
+    // 隐藏雷达视图
+    var viewRadar = document.getElementById('view-radar');
+    if (viewRadar) viewRadar.classList.remove('active-view');
+
+    // 隐藏所有选项卡，显示目标选项卡
+    var tabs = document.getElementById('peerTabs');
+    var allContainers = tabs.querySelectorAll('.peer-chat-container');
+    for (var i = 0; i < allContainers.length; i++) allContainers[i].classList.remove('active');
+    var targetContainer = tabs.querySelector('.peer-chat-container[data-peerid="' + peerId + '"]');
+    if (targetContainer) targetContainer.classList.add('active');
+
+    // 更新侧边栏激活状态
+    var items = document.querySelectorAll('#sidebarItems .nav-item');
+    for (var i = 0; i < items.length; i++) items[i].classList.remove('active-nav');
+    var sideItem = document.querySelector('#sidebarItems .nav-item[data-peerid="' + peerId + '"]');
+    if (sideItem) sideItem.classList.add('active-nav');
+
+    activePeerId = peerId;
+    syncGlobalsToActive();
+    addLog('[导航] 切换到 ' + peerId);
+}
+
+function cleanupConnection(peerId) {
+    var conn = connections[peerId];
+    if (!conn) return;
+
+    // 通过数据通道通知对方断开（同步断开）
+    if (conn.dc && conn.dc.readyState === 'open') {
+        try {
+            conn.dc.send(JSON.stringify({ type: 'disconnect' }));
+            addLog('[同步断开] 已通知 ' + peerId + ' 断开连接');
+        } catch(e) {
+            addLog('[同步断开] 通知失败: ' + e);
+        }
+    }
+
+    if (conn.pc) {
+        try { conn.pc.close(); } catch(e) {}
+    }
+    // 移除侧边栏
+    removePeerSidebarItem(peerId);
+    // 移除聊天界面
+    var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + peerId + '"]');
+    if (container) {
+        container.classList.remove('active');
+        container.remove();
+    }
+    // 从连接池移除
+    delete connections[peerId];
+    addLog('[连接] 已清理 ' + peerId + ' 的连接');
+
+    // 如果当前显示的是这个对等端，切到最近的其他对等端或首页
+    if (activePeerId === peerId) {
+        var remainingPeers = [];
+        for (var k in connections) {
+            if (connections.hasOwnProperty(k)) remainingPeers.push(k);
+        }
+        if (remainingPeers.length > 0) {
+            switchToPeer(remainingPeers[remainingPeers.length - 1]);
+        } else {
+            switchToHome();
+        }
+    }
+
+    // 更新分隔符和空状态
+    updatePeerSeparator();
+}
+
+// ====== 侧边栏管理 ======
+
+var sidebarOpen = false;
+
+function toggleSidebar() {
+    sidebarOpen = !sidebarOpen;
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebarOverlay');
+    if (sidebar) sidebar.classList.toggle('open', sidebarOpen);
+    if (overlay) overlay.classList.toggle('active', sidebarOpen);
+}
+
+function openSidebar() {
+    if (!sidebarOpen) toggleSidebar();
+}
+
+function closeSidebar() {
+    if (sidebarOpen) toggleSidebar();
+}
+
+function updatePeerSeparator() {
+    var separator = document.getElementById('peerSeparator');
+    if (!separator) return;
+    var count = 0;
+    for (var k in connections) { if (connections.hasOwnProperty(k)) count++; }
+    separator.style.display = count > 0 ? 'block' : 'none';
+
+    var emptyEl = document.getElementById('sidebarEmpty');
+    if (emptyEl) emptyEl.style.display = count === 0 ? 'block' : 'none';
+}
+
+function addPeerSidebarItem(peerId) {
+    var itemsContainer = document.getElementById('sidebarItems');
+    if (!itemsContainer) return;
+    // 检查是否已存在
+    var existing = itemsContainer.querySelector('.nav-item[data-peerid="' + peerId + '"]');
+    if (existing) return;
+
+    var item = document.createElement('div');
+    item.className = 'nav-item';
+    item.setAttribute('data-peerid', peerId);
+    item.innerHTML = '<span class="nav-item-icon">🟢</span>' +
+        '<span class="nav-item-name">' + escHtml(peerId) + '</span>' +
+        '<button class="nav-item-close" title="关闭连接">✕</button>';
+
+    // 点击切换到对等端
+    item.onclick = function(e) {
+        if (e.target.classList.contains('nav-item-close')) return;
+        if (activePeerId === peerId) return;
+        openSidebar();
+        switchToPeer(peerId);
+    };
+
+    // 关闭按钮
+    var closeBtn = item.querySelector('.nav-item-close');
+    closeBtn.onclick = function(e) {
+        e.stopPropagation();
+        cleanupConnection(peerId);
+    };
+
+    itemsContainer.appendChild(item);
+
+    // 更新分隔符
+    updatePeerSeparator();
+}
+
+function removePeerSidebarItem(peerId) {
+    var item = document.querySelector('#sidebarItems .nav-item[data-peerid="' + peerId + '"]');
+    if (item) item.remove();
+    updatePeerSeparator();
+}
+
+// ====== 创建对等聊天界面 (test3.html 风格) ======
+
+function createPeerChatContainer(peerId) {
+    var template = document.getElementById('transferTemplate');
+    if (!template) return null;
+    var tabs = document.getElementById('peerTabs');
+    if (!tabs) return null;
+
+    // 检查是否已存在
+    var existing = tabs.querySelector('.peer-chat-container[data-peerid="' + peerId + '"]');
+    if (existing) return existing;
+
+    // 克隆模板
+    var container = template.querySelector('.peer-chat-container').cloneNode(true);
+    container.setAttribute('data-peerid', peerId);
+    container.querySelector('.transfer-peer-id').textContent = peerId;
+
+    // 绑定汉堡按钮
+    var menuToggle = container.querySelector('.chat-menu-toggle');
+    menuToggle.onclick = function() { toggleSidebar(); };
+
+    // 绑定消息发送
+    var msgInput = container.querySelector('.message-input');
+    var sendBtn = container.querySelector('.send-msg-btn');
+    var fileInput = container.querySelector('.file-input');
+    var fileLabel = container.querySelector('.file-label-btn');
+
+    sendBtn.onclick = function() {
+        var text = msgInput.value.trim();
+        if (!text) return;
+        var conn = connections[peerId];
+        if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+            addLog('[发送失败] 数据通道未就绪');
+            return;
+        }
+        conn.dc.send(JSON.stringify({ type: 'chat', text: text }));
+        addPeerMessage(peerId, 'self', text);
+        msgInput.value = '';
+    };
+    msgInput.onkeypress = function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendBtn.onclick();
+        }
+    };
+
+    fileLabel.onclick = function() { fileInput.click(); };
+    fileInput.onchange = function() {
+        if (fileInput.files.length) {
+            var conn = connections[peerId];
+            if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+                addLog('[发送失败] 数据通道未就绪');
+                fileInput.value = '';
+                return;
+            }
+            sendFileOverDC(conn.dc, fileInput.files[0], peerId);
+            fileInput.value = '';
+        }
+    };
+
+    tabs.appendChild(container);
+
+    // 恢复已有的消息历史
+    if (connections[peerId] && connections[peerId].messages) {
+        var existingMsgs = connections[peerId].messages;
+        connections[peerId].messages = [];
+        for (var i = 0; i < existingMsgs.length; i++) {
+            addPeerMessage(peerId, existingMsgs[i].sender, existingMsgs[i].text);
+        }
+    }
+
+    return container;
+}
+
+function addPeerMessage(peerId, sender, text) {
+    var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + peerId + '"]');
+    if (!container) return;
+    var msgList = container.querySelector('.transfer-messages');
+    if (!msgList) return;
+
+    var wrapper = document.createElement('div');
+    if (sender === 'self') {
+        wrapper.className = 'message-wrapper self-msg';
+    } else if (sender === 'system') {
+        wrapper.className = 'message-wrapper system-msg';
+    } else {
+        wrapper.className = 'message-wrapper peer-msg';
+    }
+
+    var bubble = document.createElement('div');
+    bubble.className = 'message';
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
+    msgList.appendChild(wrapper);
+
+    // 滚动到底部
+    var chatContainer = container.querySelector('.chat-container');
+    if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+
+    // 也存到连接的消息历史
+    if (connections[peerId]) {
+        connections[peerId].messages.push({ sender: sender, text: text });
+    }
+}
+
+function setupDataChannelForPeer(peerId, channel) {
+    channel.binaryType = 'arraybuffer';
+    var fileBuffers = [];
+    var fileName = '';
+    var fileSize = 0;
+
+    channel.onopen = function() {
+        addLog('[数据通道] ' + peerId + ' 已打开');
+        addPeerMessage(peerId, 'system', '数据通道已建立');
+    };
+    channel.onclose = function() {
+        addLog('[数据通道] ' + peerId + ' 关闭');
+    };
+    channel.onmessage = function(e) {
+        if (typeof e.data === 'string') {
+            try {
+                var msg = JSON.parse(e.data);
+                if (msg.type === 'file-meta') {
+                    fileName = msg.name;
+                    fileSize = msg.size;
+                    fileBuffers = [];
+                    addPeerMessage(peerId, 'system', '准备接收: ' + msg.name);
+                } else if (msg.type === 'file-end') {
+                    var blob = new Blob(fileBuffers);
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = fileName;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    addPeerMessage(peerId, 'system', '接收完成');
+                } else if (msg.type === 'chat') {
+                    addPeerMessage(peerId, 'peer', msg.text);
+                } else if (msg.type === 'disconnect') {
+                    // 对方主动断开连接，同步清理
+                    addLog('[同步断开] ' + peerId + ' 已断开连接');
+                    addPeerMessage(peerId, 'system', '对方已断开连接');
+                    // 延迟清理，让用户看到消息
+                    setTimeout(function() {
+                        cleanupConnection(peerId);
+                    }, 100);
+                }
+            } catch(ex) {}
+        } else if (e.data instanceof ArrayBuffer) {
+            fileBuffers.push(e.data);
+        }
+    };
+}
+
+// 通过数据通道发送文件
+function sendFileOverDC(dcChannel, file, peerId) {
+    dcChannel.send(JSON.stringify({ type: 'file-meta', name: file.name, size: file.size }));
+    var chunkSize = 16 * 1024;
+    var offset = 0;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        dcChannel.send(e.target.result);
+        offset += e.target.result.byteLength;
+        if (offset < file.size) readNext();
+        else {
+            dcChannel.send(JSON.stringify({ type: 'file-end' }));
+            addPeerMessage(peerId, 'system', '发送完成: ' + file.name);
+        }
+    };
+    var readNext = function() { reader.readAsArrayBuffer(file.slice(offset, offset + chunkSize)); };
+    readNext();
+}
+
+// 兼容旧版：全局sendChatMessage和sendFile（无参数版本使用activePeerId）
+function sendChatMessage() {
+    if (activePeerId) {
+        var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + activePeerId + '"]');
+        if (container) {
+            var sendBtn = container.querySelector('.send-msg-btn');
+            if (sendBtn) sendBtn.onclick();
+        }
+    }
+}
+function sendFile(file) {
+    if (activePeerId) {
+        var conn = connections[activePeerId];
+        if (conn && conn.dc) {
+            sendFileOverDC(conn.dc, file, activePeerId);
+        }
+    }
+}
+
+// ====== 侧边栏事件绑定 ======
+
+document.getElementById('sidebarToggle').onclick = function() {
+    toggleSidebar();
+};
+
+document.getElementById('sidebarOverlay').onclick = function() {
+    closeSidebar();
+};
+
+// 首页按钮
+document.getElementById('homeSidebarItem').onclick = function() {
+    closeSidebar();
+    switchToHome();
+};
 
 function showModal(title, message) {
     modalTitle.textContent = title;
@@ -109,32 +514,34 @@ function handleSignalingMessage(msg) {
         myId = msg.id;
         if (myIdDisplay) myIdDisplay.textContent = myId;
         addLog(`[信令] 我的ID: ${myId}`);
-        // 雷达模式始终开启，连接后发送房间号信息
         ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
     } else if (msg.type === 'same_network_clients') {
         peerNodes = msg.clients;
-        updateRadarPeers(); // 在radar-detect.js中定义
+        updateRadarPeers();
         radarStatus.textContent = `发现 ${peerNodes.length} 个设备`;
     } else if (msg.type === 'new_peer') {
         if (!peerNodes.includes(msg.peer_id)) {
             peerNodes.push(msg.peer_id);
-            updateRadarPeers(); // 在radar-detect.js中定义
+            updateRadarPeers();
         }
     } else if (msg.type === 'peer_left') {
         peerNodes = peerNodes.filter(id => id !== msg.peer_id);
-        updateRadarPeers(); // 在radar-detect.js中定义
+        updateRadarPeers();
     } else if (msg.type === 'connect_request') {
-        // 被动方收到连接请求
         handleConnectRequest(msg.from);
     } else if (msg.type === 'connect_accept') {
-        // 主动方收到接受，开始交换
         startWebRTCAsInitiator(msg.from);
     } else if (msg.type === 'answer') {
         if (role === 'receiver') {
+            if (msg.from && !connections[msg.from]) {
+                targetId = msg.from;
+                createConnectionEntry(msg.from, role);
+                connections[msg.from].pc = pc;
+                connections[msg.from].dc = dc;
+            }
             handleRemoteAnswerCompressed(msg.payload);
         }
     } else if (msg.type === 'offer') {
-        // 被动方收到offer（在连接接受后）
         handleRemoteOfferCompressed(msg.payload, msg.from);
     } else if (msg.type === 'ice') {
         handleRemoteIce(msg.payload);
@@ -142,36 +549,33 @@ function handleSignalingMessage(msg) {
 }
 
 async function handleConnectRequest(fromId) {
-    // 重置运营商NAT状态（全新连接）
     gatewayBurstAttempted = false;
     carrierNatHandlingStage = 0;
     carrierNatDetectedIp = null;
     carrierNatRealTimeDetectionTriggered = false;
     carrierNatReplacementMap = {};
 
-    // 关闭旧PeerConnection（避免干扰新连接）
-    if (pc) {
-        pc.close();
-        pc = null;
-    }
     pendingIceCandidates = [];
     remoteIceCandidates = [];
     localCandidates = [];
 
-    // 自动接受连接请求，无需确认
+    createConnectionEntry(fromId, 'sender');
     targetId = fromId;
-    role = 'sender'; // 被动方作为answerer
-    // 通知主动方已接受
+    role = 'sender';
+
     ws.send(JSON.stringify({ type: 'connect_accept', target: fromId }));
     addLog(`[连接] 自动接受 ${fromId} 的连接请求`);
 }
 
 async function startWebRTCAsInitiator(peerId) {
+    createConnectionEntry(peerId, 'receiver');
     targetId = peerId;
     role = 'receiver';
     radarStatus.textContent = `连接 ${peerId}...`;
     createPeerConnection();
-    createDataChannel(); // 在transfer.js中定义
+    if (connections[peerId]) connections[peerId].pc = pc;
+    createDataChannel();
+    if (connections[peerId]) connections[peerId].dc = dc;
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await new Promise(resolve => {
@@ -234,28 +638,79 @@ function createPeerConnection() {
     }
     pendingIceCandidates = [];
     remoteIceCandidates = [];
-    // gatewayBurstAttempted 在 requestConnection 中重置，不在 createPeerConnection 中重置
-    // 这样可避免运营商NAT重连后再次触发检测
     const iceServers = stunServer ? [{ urls: stunServer }] : [];
     pc = new RTCPeerConnection({ iceServers });
+
+    // 捕获创建时的目标ID，避免切换tab后targetId变化
+    var createdPcForPeerId = targetId;
 
     pc.onconnectionstatechange = () => {
         const state = pc.connectionState;
         addLog(`[连接状态] ${state}`);
-        document.getElementById('connStateR').textContent = state;
+        var connStateR = document.getElementById('connStateR');
+        if (connStateR) connStateR.textContent = state;
+
         if (state === 'connected') {
-            showTransferAssistant(); // 在transfer.js中定义
-            // 重置失败计数（不重置 gatewayBurstAttempted，避免运营商NAT处理完成后重复弹窗）
             connectionFailureCount = 0;
-        } else if (state === 'failed' || state === 'disconnected') {
+            var peerId = createdPcForPeerId || targetId;
+            if (peerId && connections[peerId]) {
+                connections[peerId].pc = pc;
+                connections[peerId].connected = true;
+
+                // 确保DC已保存到连接条目（可能由ondatachannel或createDataChannel设置）
+                if (!connections[peerId].dc && dc) {
+                    connections[peerId].dc = dc;
+                }
+
+                // 创建聊天UI
+                createPeerChatContainer(peerId);
+
+                // 设置数据通道（使用per-peer版本）
+                var peerDc = connections[peerId].dc || dc;
+                if (peerDc) {
+                    setupDataChannelForPeer(peerId, peerDc);
+                }
+
+                // 添加到侧边栏
+                addPeerSidebarItem(peerId);
+                // 切换到对等端界面
+                switchToPeer(peerId);
+                // 自动打开侧边栏
+                openSidebar();
+                // 连接成功，断开信令
+                if (ws) {
+                    addLog('[信令] 连接已建立，断开信令服务器');
+                    ws.close();
+                }
+            }
+        } else if (state === 'failed') {
             connectionFailureCount++;
-            addLog(`[连接失败] 状态: ${state}, 失败次数: ${connectionFailureCount}`);
-            if (connectionFailureCount === 1) {
-                // 第一次失败，尝试运营商NAT处理（自动爆破/询问用户）
-                attemptGatewayBurstOnFailure();
-            } else if (connectionFailureCount >= 2) {
-                // 后续失败继续尝试（由 attemptGatewayBurstOnFailure 内部阶段控制）
-                attemptGatewayBurstOnFailure();
+            addLog(`[连接失败] 失败次数: ${connectionFailureCount}`);
+
+            var cleanupId = createdPcForPeerId || targetId;
+            if (cleanupId) {
+                // 延迟清理，让用户看到状态
+                setTimeout(function() {
+                    if (connections[cleanupId] && !connections[cleanupId].connected) {
+                        cleanupConnection(cleanupId);
+                    }
+                }, 500);
+            }
+        } else if (state === 'disconnected') {
+            // ICE断开，尝试ICE重启，不立即清理
+            addLog('[连接断开] 等待可能的重连...');
+            // 如果5秒内没有恢复，清理连接
+            var discPeerId = createdPcForPeerId || targetId;
+            if (discPeerId) {
+                setTimeout(function() {
+                    if (connections[discPeerId] && connections[discPeerId].pc) {
+                        var currentState = connections[discPeerId].pc.connectionState;
+                        if (currentState === 'disconnected' || currentState === 'failed') {
+                            addLog('[连接清理] 超时未恢复，清理 ' + discPeerId);
+                            cleanupConnection(discPeerId);
+                        }
+                    }
+                }, 5000);
             }
         }
     };
@@ -274,14 +729,19 @@ function createPeerConnection() {
         } else {
             addLog('[ICE收集] 完成');
             if (role === 'receiver' && centerDisplay && centerDisplay.classList.contains('show-qr')) {
-                generateCompressedQR(); // 在qr-scan.js中定义
+                generateCompressedQR();
             }
         }
     };
 
     pc.ondatachannel = (e) => {
         dc = e.channel;
-        setupDataChannel(dc); // 在transfer.js中定义
+        var peerId = createdPcForPeerId || targetId;
+        if (peerId && connections[peerId]) {
+            connections[peerId].dc = dc;
+            // 直接使用per-peer版本，不再调用旧版setupDataChannel
+            setupDataChannelForPeer(peerId, dc);
+        }
     };
 
     return pc;
@@ -294,23 +754,23 @@ async function generateOffer() {
             pc.close();
         }
         localCandidates = [];
-        
+
         addLog('[Offer] 初始化 PeerConnection...');
-        createPeerConnection(); 
-        
+        createPeerConnection();
+
         addLog('[Offer] 创建 DataChannel...');
-        createDataChannel(); 
-        
+        createDataChannel();
+
         addLog('[Offer] 正在创建 SDP Offer...');
         const offer = await pc.createOffer();
-        
+
         addLog('[Offer] 设置本地描述...');
         await pc.setLocalDescription(offer);
-        
+
         addLog('[Offer] 等待 ICE 收集...');
     } catch (err) {
         addLog('[错误] generateOffer 内部崩溃: ' + err.message);
-        throw err; // 继续抛出，让外层的 onclick 捕获
+        throw err;
     }
 }
 
@@ -319,7 +779,6 @@ async function handleRemoteAnswerCompressed(compressed) {
     const answerSdp = buildSDP('answer', u, p, f);
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     addLog('[设置远程Answer] 成功');
-    // 添加缓存ICE
     while (pendingIceCandidates.length) {
         const cand = pendingIceCandidates.shift();
         await pc.addIceCandidate({ candidate: cand, sdpMid: '0', sdpMLineIndex: 0 }).catch(e=>addLog('[缓存ICE添加失败] '+e));
@@ -333,19 +792,17 @@ async function handleRemoteOfferCompressed(compressed, fromId) {
     const { u, p, f, ice } = compressed;
     const offerSdp = buildSDP('offer', u, p, f);
 
-    // 保存已在handleRemoteIce中缓存的ICE候选和远程ICE候选（createPeerConnection会清空它们）
     var savedPendingIce = pendingIceCandidates.slice();
     var savedRemoteIce = remoteIceCandidates.slice();
 
     createPeerConnection();
-    // 恢复remoteIceCandidates，避免attemptGatewayBurstOnFailure无法提取端口
+    if (connections[fromId]) connections[fromId].pc = pc;
     remoteIceCandidates = savedRemoteIce;
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
     for (const ic of ice) {
         await pc.addIceCandidate({ candidate: buildICECandidate(ic.ip, ic.port, ic.type, u), sdpMid: '0', sdpMLineIndex: 0 });
     }
 
-    // 处理缓存的候选（包含运营商NAT替换后的候选）
     for (var i = 0; i < savedPendingIce.length; i++) {
         await pc.addIceCandidate({ candidate: savedPendingIce[i], sdpMid: '0', sdpMLineIndex: 0 }).catch(e=>addLog('[缓存ICE添加失败] '+e));
     }
@@ -362,45 +819,35 @@ async function handleRemoteOfferCompressed(compressed, fromId) {
     addLog(`[探查] 发送Answer给 ${targetId}`);
 }
 
-// 重新连接并应用运营商NAT替换
 async function reconnectWithCarrierNatReplacement(detectedCarrierNatIp, replacementIpOrIps, port) {
     addLog(`[运营商NAT重新连接] 开始重新连接，替换IP: ${detectedCarrierNatIp}`);
 
-    // 存储替换映射
     if (Array.isArray(replacementIpOrIps)) {
-        // 爆破模式：多个IP，存储整个数组
         carrierNatReplacementMap[detectedCarrierNatIp] = replacementIpOrIps;
     } else {
-        // 单IP模式
         carrierNatReplacementMap[detectedCarrierNatIp] = replacementIpOrIps;
     }
 
-    // 标记已在处理中（必须在 pc.close() 之前设置，防止旧 PC 的 onconnectionstatechange 重复触发）
     gatewayBurstAttempted = true;
 
-    // 关闭当前连接
     if (pc) {
         pc.close();
         pc = null;
     }
 
-    // 重置状态（保留 gatewayBurstAttempted = true）
     connectionFailureCount = 0;
     remoteIceCandidates = [];
     pendingIceCandidates = [];
     localCandidates = [];
     carrierNatRealTimeDetectionTriggered = false;
 
-    // 根据角色重新发起连接
     if (role === 'receiver' && targetId) {
-        // 主动方：重新发送连接请求
         addLog(`[运营商NAT重新连接] 主动方重新连接 ${targetId}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'connect_request', target: targetId }));
             radarStatus.textContent = `运营商NAT检测，重新连接 ${targetId}...`;
         }
     } else if (role === 'sender' && targetId) {
-        // 被动方检测到运营商NAT：发送连接请求给主动方（角色反转重新建立连接）
         addLog(`[运营商NAT重新连接] 被动方发送连接请求给 ${targetId}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'connect_request', target: targetId }));
@@ -411,30 +858,23 @@ async function reconnectWithCarrierNatReplacement(detectedCarrierNatIp, replacem
     }
 }
 
-// 替换ICE候选中的IP地址
 function replaceIceCandidateIp(candidateStr) {
     if (!candidateStr || typeof candidateStr !== 'string') return candidateStr;
 
-    // 解析ICE候选字符串，格式: "candidate:... udp ... IP PORT typ ..."
     const parts = candidateStr.split(' ');
     if (parts.length < 8) return candidateStr;
 
     const originalIp = parts[4];
-    if (!originalIp || originalIp.includes(':')) return candidateStr; // 忽略IPv6
+    if (!originalIp || originalIp.includes(':')) return candidateStr;
 
-    // 检查是否有替换映射
     const replacement = carrierNatReplacementMap[originalIp];
     if (!replacement) return candidateStr;
 
-    // 如果是数组，使用第一个IP
     const replacementIp = Array.isArray(replacement) ? replacement[0] : replacement;
-
-    // 替换IP
     parts[4] = replacementIp;
     return parts.join(' ');
 }
 
-// 从本地SDP中提取ice-ufrag
 function extractLocalUfrag() {
     if (!pc || !pc.localDescription || !pc.localDescription.sdp) return '';
     var match = pc.localDescription.sdp.match(/a=ice-ufrag:(.+)/);
@@ -442,21 +882,15 @@ function extractLocalUfrag() {
 }
 
 async function handleRemoteIce(candidateStr) {
-    // === 第一步：始终解析ICE候选，无论PC是否存在 ===
-    // 这样即发送方在收到offer前也能检测运营商NAT并缓存替换后的候选
     var parts = candidateStr.split(' ');
     var originalIp = parts.length >= 8 ? parts[4] : null;
     var candidatePort = parts.length >= 8 ? parseInt(parts[5], 10) : NaN;
 
-    // === 第二步：实时运营商NAT检测 + 建立IP替换映射 ===
-    // 无论是接收方还是发送方，拿到ICE就检测
-    // 检测为运营商NAT即替换IP，不走平行候选，类似旧版爆破逻辑
     if (carrierNatDetectionEnabled && !gatewayBurstAttempted && !carrierNatRealTimeDetectionTriggered) {
         if (originalIp && window.isCarrierNatIp && window.isCarrierNatIp(originalIp)) {
             if (!carrierNatDetectedIp) {
                 carrierNatDetectedIp = originalIp;
             }
-            // 已有替换映射（例如之前手动输入的IP）则跳过
             if (!carrierNatReplacementMap[originalIp]) {
                 if (window.setupRealtimeReplacement) {
                     var replacementIp = window.setupRealtimeReplacement(originalIp);
@@ -469,7 +903,6 @@ async function handleRemoteIce(candidateStr) {
         }
     }
 
-    // === 第三步：替换IP（如果建立了映射） ===
     var replacedCandidate = replaceIceCandidateIp(candidateStr);
     var replacedIp = replacedCandidate.split(' ')[4];
 
@@ -477,11 +910,9 @@ async function handleRemoteIce(candidateStr) {
         addLog('[ICE替换] ' + originalIp + ' -> ' + replacedIp);
     }
 
-    // === 第四步：添加替换后的候选到ICE池或缓存 ===
-    remoteIceCandidates.push(candidateStr); // 保存原始候选用于后续分析
+    remoteIceCandidates.push(candidateStr);
 
     if (!pc) {
-        // 发送方在收到offer前可能没有PC，缓存候选等offer到达后处理
         pendingIceCandidates.push(replacedCandidate);
         addLog('[ICE缓存] 无PeerConnection，等待offer');
         return;
@@ -522,7 +953,6 @@ applyStunBtn.onclick = () => {
     stunServer = stunServerInput.value.trim();
     addLog(`STUN服务器: ${stunServer}`);
 };
-// 房间号输入自动应用：失去焦点或按回车时更新
 roomIdInput.onchange = function() {
     const value = roomIdInput.value.trim();
     roomId = value;
@@ -530,17 +960,14 @@ roomIdInput.onchange = function() {
         addLog(`房间号已设置为: ${value}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
-            addLog('[雷达] 房间信息已更新');
         }
     } else {
         addLog('已清除房间号，将按连接IP匹配');
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: '' } }));
-            addLog('[雷达] 房间信息已更新（无房间号，按IP匹配）');
         }
     }
 };
-// 回车键也触发
 roomIdInput.onkeypress = function(e) {
     if (e.key === 'Enter') roomIdInput.onchange();
 };
@@ -567,7 +994,6 @@ var isQrMode = false;
 // 切换雷达/二维码显示
 toggleDisplayBtn.onclick = async function() {
     if (isQrMode) {
-        // 切换到雷达模式
         centerDisplay.classList.remove('show-qr');
         iconQr.style.display = 'block';
         iconRadar.style.display = 'none';
@@ -575,7 +1001,6 @@ toggleDisplayBtn.onclick = async function() {
         isQrMode = false;
         addLog('[显示] 切换到雷达模式');
     } else {
-        // 切换到二维码模式
         centerDisplay.classList.add('show-qr');
         iconQr.style.display = 'none';
         iconRadar.style.display = 'block';
@@ -584,7 +1009,6 @@ toggleDisplayBtn.onclick = async function() {
         role = 'receiver';
         addLog('[显示] 切换到二维码模式');
 
-        // 自动连接信令并生成Offer
         try {
             if (!serverConnected) {
                 addLog('[系统] 正在连接信令服务器...');
@@ -619,103 +1043,13 @@ document.getElementById('cancelScanBtn').onclick = function() {
     if (video && video.srcObject) video.srcObject.getTracks().forEach(function(t) { t.stop(); });
 };
 
-document.getElementById('closeTransferBtn').onclick = function() {
-    transferAssistant.style.display = 'none';
-    if (pc) pc.close();
-};
-
-sendMessageBtn.onclick = sendChatMessage; // 在transfer.js中定义
-messageInput.addEventListener('keypress', (e) => { if(e.key==='Enter') sendChatMessage(); });
-fileInput.onchange = (e) => {
-    if (fileInput.files.length) sendFile(fileInput.files[0]); // 在transfer.js中定义
-    fileInput.value = '';
-};
-
-// 连接失败时处理运营商NAT（简化2阶段：实时爆破已在handleRemoteIce中完成）
-// 第1次失败 → 问用户要IP → 第2次失败 → 提示更改高级设置
+// ====== 运营商NAT连接失败处理 ======
 async function attemptGatewayBurstOnFailure() {
-    if (!carrierNatDetectionEnabled) return;
-
-    // 连接已成功，不再干扰用户
-    if (pc && (pc.connectionState === 'connected' || pc.connectionState === 'completed')) {
-        addLog('[运营商NAT] 连接已成功，跳过失败处理');
-        return;
-    }
-
-    // 如果已在处理中且没有更多阶段，跳过
-    if (gatewayBurstAttempted && carrierNatHandlingStage === 0) {
-        addLog('[运营商NAT] 已在处理中，跳过');
-        return;
-    }
-
-    // 所有阶段已耗尽，提示用户调整设置
-    if (carrierNatHandlingStage >= 2) {
-        addLog('[运营商NAT] 所有方法已尝试，提示用户调整设置');
-        alert('所有连接尝试均告失败。\n\n请检查:\n1. 对方是否在同一网络\n2. 高级设置中的IP爆破范围是否正确\n\n当前爆破范围: ' + gatewayBurstRange + '\n可尝试修改为其他网段，例如 192.168.0-255.1');
-        return;
-    }
-
-    // 确定运营商NAT IP（优先使用实时检测到的，否则扫描候选列表）
-    var carrierNatIp = carrierNatDetectedIp;
-    if (!carrierNatIp && remoteIceCandidates.length > 0) {
-        var info = extractRemoteIpsAndPort(remoteIceCandidates);
-        carrierNatIp = info.ips.find(function(ip) { return isCarrierNatIp(ip); });
-    }
-    if (!carrierNatIp) {
-        addLog('[运营商NAT] 未检测到运营商NAT IP');
-        return;
-    }
-
-    // 提取端口
-    var portInfo = remoteIceCandidates.length > 0 ? extractRemoteIpsAndPort(remoteIceCandidates) : { ips: [], port: null };
-    var port = portInfo.port;
-    if (!port) {
-        addLog('[运营商NAT] 无法提取端口');
-        return;
-    }
-
-    addLog('[运营商NAT] 处理阶段 ' + (carrierNatHandlingStage + 1) + '/2，IP: ' + carrierNatIp);
-
-    // ===== 阶段1: 询问用户输入IP =====
-    if (carrierNatHandlingStage === 0) {
-        carrierNatHandlingStage = 1;
-        addLog('[运营商NAT] 第1步: 询问用户输入IP');
-
-        // 尝试使用自定义模态框，若不可用则回退到prompt
-        var ip = null;
-        try {
-            ip = prompt('连接失败，对方IP ' + carrierNatIp + ' 为运营商NAT地址。\n\n请输入对方的内网IP地址（端口: ' + port + '）:\n例如: 192.168.1.100', '192.168.1.100');
-        } catch(e) { ip = null; }
-
-        if (!ip) {
-            addLog('[运营商NAT] 用户取消输入IP');
-            carrierNatHandlingStage = 0; // 允许重新尝试
-            gatewayBurstAttempted = false;
-            return;
-        }
-
-        // 验证IP格式
-        var ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-        if (!ipRegex.test(ip)) {
-            alert('IP地址格式无效');
-            carrierNatHandlingStage = 0;
-            gatewayBurstAttempted = false;
-            return;
-        }
-
-        addLog('[运营商NAT] 用户输入IP: ' + ip + '，重新连接');
-        reconnectWithCarrierNatReplacement(carrierNatIp, ip, port);
-        return;
-    }
-
-    // ===== 阶段2: 全部失败，提示更改设置 =====
-    carrierNatHandlingStage = 2;
-    alert('运营商NAT连接失败。\n\n请在高级设置中调整IP爆破范围或NAT检测正则。\n当前范围: ' + gatewayBurstRange);
+    addLog('[运营商NAT] 连接失败，跳过NAT处理（不再提示用户）');
 }
 
 // ===== 正则检测模式UI管理 =====
 
-// 渲染正则检测模式列表
 function renderRegexPatternList() {
     if (!regexPatternContainer) return;
     var configs = window.getCarrierNatPatterns ? window.getCarrierNatPatterns() : [];
@@ -731,7 +1065,6 @@ function renderRegexPatternList() {
     }
     regexPatternContainer.innerHTML = html;
 
-    // 绑定输入事件，实时更新检测模式
     var nameInputs = regexPatternContainer.querySelectorAll('.regex-name');
     var patternInputs = regexPatternContainer.querySelectorAll('.regex-pattern');
     for (var j = 0; j < nameInputs.length; j++) {
@@ -742,7 +1075,6 @@ function renderRegexPatternList() {
     }
 }
 
-// 应用正则模式变更
 function applyRegexPatternChanges() {
     if (!regexPatternContainer) return;
     var items = regexPatternContainer.querySelectorAll('.regex-item');
@@ -763,7 +1095,6 @@ function applyRegexPatternChanges() {
     addLog('[NAT正则] 已更新检测规则，当前 ' + newConfigs.length + ' 条');
 }
 
-// 添加新的正则模式
 function addRegexPattern() {
     if (!regexPatternContainer) return;
     var configs = window.getCarrierNatPatterns ? window.getCarrierNatPatterns() : [];
@@ -775,7 +1106,6 @@ function addRegexPattern() {
     addLog('[NAT正则] 已添加新规则，请编辑正则表达式');
 }
 
-// 删除正则模式
 function removeRegexPattern(index) {
     var configs = window.getCarrierNatPatterns ? window.getCarrierNatPatterns() : [];
     if (index >= 0 && index < configs.length) {
@@ -788,13 +1118,12 @@ function removeRegexPattern(index) {
     }
 }
 
-// HTML转义辅助
 function escHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// 将核心函数挂载到window对象，供其他模块调用
+// 将核心函数挂载到window对象
 window.showModal = showModal;
 window.hideModal = hideModal;
 window.addLog = addLog;
@@ -817,15 +1146,27 @@ window.renderRegexPatternList = renderRegexPatternList;
 window.applyRegexPatternChanges = applyRegexPatternChanges;
 window.addRegexPattern = addRegexPattern;
 window.removeRegexPattern = removeRegexPattern;
+// 多连接管理导出
+window.createConnectionEntry = createConnectionEntry;
+window.switchToHome = switchToHome;
+window.switchToPeer = switchToPeer;
+window.cleanupConnection = cleanupConnection;
+window.addPeerSidebarItem = addPeerSidebarItem;
+window.removePeerSidebarItem = removePeerSidebarItem;
+window.addPeerMessage = addPeerMessage;
+window.toggleSidebar = toggleSidebar;
+window.openSidebar = openSidebar;
+window.closeSidebar = closeSidebar;
+window.sendChatMessage = sendChatMessage;
+window.sendFile = sendFile;
+window.setupDataChannelForPeer = setupDataChannelForPeer;
 
 // 初始化正则检测模式UI
 if (addRegexPatternBtn) {
     addRegexPatternBtn.onclick = addRegexPattern;
 }
-// 延迟一帧渲染，确保其他初始化完成
 setTimeout(function() {
     renderRegexPatternList();
-    // 尝试从JSON文件加载检测规则（不影响UI渲染）
     if (window.loadCarrierNatPatternsFromJson) {
         window.loadCarrierNatPatternsFromJson().then(function() {
             renderRegexPatternList();
