@@ -242,196 +242,7 @@ function removePeerSidebarItem(peerId) {
     updatePeerSeparator();
 }
 
-// ====== 创建对等聊天界面 (test3.html 风格) ======
-
-function createPeerChatContainer(peerId) {
-    var template = document.getElementById('transferTemplate');
-    if (!template) return null;
-    var tabs = document.getElementById('peerTabs');
-    if (!tabs) return null;
-
-    // 检查是否已存在
-    var existing = tabs.querySelector('.peer-chat-container[data-peerid="' + peerId + '"]');
-    if (existing) return existing;
-
-    // 克隆模板
-    var container = template.querySelector('.peer-chat-container').cloneNode(true);
-    container.setAttribute('data-peerid', peerId);
-    container.querySelector('.transfer-peer-id').textContent = peerId;
-
-    // 绑定汉堡按钮
-    var menuToggle = container.querySelector('.chat-menu-toggle');
-    menuToggle.onclick = function() { toggleSidebar(); };
-
-    // 绑定消息发送
-    var msgInput = container.querySelector('.message-input');
-    var sendBtn = container.querySelector('.send-msg-btn');
-    var fileInput = container.querySelector('.file-input');
-    var fileLabel = container.querySelector('.file-label-btn');
-
-    sendBtn.onclick = function() {
-        var text = msgInput.value.trim();
-        if (!text) return;
-        var conn = connections[peerId];
-        if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
-            addLog('[发送失败] 数据通道未就绪');
-            return;
-        }
-        conn.dc.send(JSON.stringify({ type: 'chat', text: text }));
-        addPeerMessage(peerId, 'self', text);
-        msgInput.value = '';
-    };
-    msgInput.onkeypress = function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendBtn.onclick();
-        }
-    };
-
-    fileLabel.onclick = function() { fileInput.click(); };
-    fileInput.onchange = function() {
-        if (fileInput.files.length) {
-            var conn = connections[peerId];
-            if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
-                addLog('[发送失败] 数据通道未就绪');
-                fileInput.value = '';
-                return;
-            }
-            sendFileOverDC(conn.dc, fileInput.files[0], peerId);
-            fileInput.value = '';
-        }
-    };
-
-    tabs.appendChild(container);
-
-    // 恢复已有的消息历史
-    if (connections[peerId] && connections[peerId].messages) {
-        var existingMsgs = connections[peerId].messages;
-        connections[peerId].messages = [];
-        for (var i = 0; i < existingMsgs.length; i++) {
-            addPeerMessage(peerId, existingMsgs[i].sender, existingMsgs[i].text);
-        }
-    }
-
-    return container;
-}
-
-function addPeerMessage(peerId, sender, text) {
-    var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + peerId + '"]');
-    if (!container) return;
-    var msgList = container.querySelector('.transfer-messages');
-    if (!msgList) return;
-
-    var wrapper = document.createElement('div');
-    if (sender === 'self') {
-        wrapper.className = 'message-wrapper self-msg';
-    } else if (sender === 'system') {
-        wrapper.className = 'message-wrapper system-msg';
-    } else {
-        wrapper.className = 'message-wrapper peer-msg';
-    }
-
-    var bubble = document.createElement('div');
-    bubble.className = 'message';
-    bubble.textContent = text;
-    wrapper.appendChild(bubble);
-    msgList.appendChild(wrapper);
-
-    // 滚动到底部
-    var chatContainer = container.querySelector('.chat-container');
-    if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-
-    // 也存到连接的消息历史
-    if (connections[peerId]) {
-        connections[peerId].messages.push({ sender: sender, text: text });
-    }
-}
-
-function setupDataChannelForPeer(peerId, channel) {
-    channel.binaryType = 'arraybuffer';
-    var fileBuffers = [];
-    var fileName = '';
-    var fileSize = 0;
-
-    channel.onopen = function() {
-        addLog('[数据通道] ' + peerId + ' 已打开');
-        addPeerMessage(peerId, 'system', '数据通道已建立');
-    };
-    channel.onclose = function() {
-        addLog('[数据通道] ' + peerId + ' 关闭');
-    };
-    channel.onmessage = function(e) {
-        if (typeof e.data === 'string') {
-            try {
-                var msg = JSON.parse(e.data);
-                if (msg.type === 'file-meta') {
-                    fileName = msg.name;
-                    fileSize = msg.size;
-                    fileBuffers = [];
-                    addPeerMessage(peerId, 'system', '准备接收: ' + msg.name);
-                } else if (msg.type === 'file-end') {
-                    var blob = new Blob(fileBuffers);
-                    var a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = fileName;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                    addPeerMessage(peerId, 'system', '接收完成');
-                } else if (msg.type === 'chat') {
-                    addPeerMessage(peerId, 'peer', msg.text);
-                } else if (msg.type === 'disconnect') {
-                    // 对方主动断开连接，同步清理
-                    addLog('[同步断开] ' + peerId + ' 已断开连接');
-                    addPeerMessage(peerId, 'system', '对方已断开连接');
-                    // 延迟清理，让用户看到消息
-                    setTimeout(function() {
-                        cleanupConnection(peerId);
-                    }, 100);
-                }
-            } catch(ex) {}
-        } else if (e.data instanceof ArrayBuffer) {
-            fileBuffers.push(e.data);
-        }
-    };
-}
-
-// 通过数据通道发送文件
-function sendFileOverDC(dcChannel, file, peerId) {
-    dcChannel.send(JSON.stringify({ type: 'file-meta', name: file.name, size: file.size }));
-    var chunkSize = 16 * 1024;
-    var offset = 0;
-    var reader = new FileReader();
-    reader.onload = function(e) {
-        dcChannel.send(e.target.result);
-        offset += e.target.result.byteLength;
-        if (offset < file.size) readNext();
-        else {
-            dcChannel.send(JSON.stringify({ type: 'file-end' }));
-            addPeerMessage(peerId, 'system', '发送完成: ' + file.name);
-        }
-    };
-    var readNext = function() { reader.readAsArrayBuffer(file.slice(offset, offset + chunkSize)); };
-    readNext();
-}
-
-// 兼容旧版：全局sendChatMessage和sendFile（无参数版本使用activePeerId）
-function sendChatMessage() {
-    if (activePeerId) {
-        var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + activePeerId + '"]');
-        if (container) {
-            var sendBtn = container.querySelector('.send-msg-btn');
-            if (sendBtn) sendBtn.onclick();
-        }
-    }
-}
-function sendFile(file) {
-    if (activePeerId) {
-        var conn = connections[activePeerId];
-        if (conn && conn.dc) {
-            sendFileOverDC(conn.dc, file, activePeerId);
-        }
-    }
-}
+// 聊天UI和传输函数已移至 transfer.js
 
 // ====== 侧边栏事件绑定 ======
 
@@ -583,7 +394,13 @@ async function startWebRTCAsInitiator(peerId) {
     const u = sdp.match(/a=ice-ufrag:(.+)/)[1];
     const p = sdp.match(/a=ice-pwd:(.+)/)[1];
     const f = sdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-    const iceCompact = localCandidates.map(c => {
+    const iceCompact = localCandidates
+        .filter(c => {
+            const parts = c.candidate.split(' ');
+            const typIdx = parts.indexOf('typ');
+            return typIdx > 1 && parseInt(parts[typIdx-1]) >= 1024;
+        })
+        .map(c => {
         const parts = c.candidate.split(' ');
         const typIdx = parts.indexOf('typ');
         return { ip: parts[typIdx-2], port: parseInt(parts[typIdx-1]), type: parts[typIdx+1] };
@@ -1147,13 +964,9 @@ window.switchToPeer = switchToPeer;
 window.cleanupConnection = cleanupConnection;
 window.addPeerSidebarItem = addPeerSidebarItem;
 window.removePeerSidebarItem = removePeerSidebarItem;
-window.addPeerMessage = addPeerMessage;
 window.toggleSidebar = toggleSidebar;
 window.openSidebar = openSidebar;
 window.closeSidebar = closeSidebar;
-window.sendChatMessage = sendChatMessage;
-window.sendFile = sendFile;
-window.setupDataChannelForPeer = setupDataChannelForPeer;
 
 // 初始化正则检测模式UI
 if (addRegexPatternBtn) {

@@ -255,8 +255,8 @@ main#mainContent {
 /* ===== 二维码展示框 ===== */
 .big-qr-box {
     position: absolute;
-    width: 320px;
-    height: 320px;
+    width: 340px;
+    height: 340px;
     background: rgba(4, 26, 58, 0.6);
     border: 2px solid #00F3FF;
     box-shadow: 0 0 30px rgba(0, 243, 255, 0.3);
@@ -265,6 +265,7 @@ main#mainContent {
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 4px;
     opacity: 0;
     pointer-events: none;
     transition: 0.4s ease;
@@ -280,8 +281,8 @@ main#mainContent {
     justify-content: center;
 }
 .qr-code-inner canvas {
-    max-width: 200px;
-    max-height: 200px;
+    max-width: 290px;
+    max-height: 290px;
 }
 
 .qr-info {
@@ -710,9 +711,26 @@ main#mainContent {
     .radar-right-controls { right: 12px; gap: 14px; }
     .control-widget { padding: 8px; }
     .control-widget svg { width: 36px; height: 36px; }
-    .big-qr-box { width: 220px; height: 220px; }
-    .big-qr-box canvas { max-width: 160px; max-height: 160px; }
+    .big-qr-box { width: 240px; height: 240px; }
+    .big-qr-box canvas { max-width: 200px; max-height: 200px; }
     .room-input { min-width: 160px; font-size: 12px; }
+
+    /* 聊天界面适配 */
+    .chat-top-bar { height: 50px; padding: 0 10px; }
+    .chat-title { font-size: 14px; margin-left: 10px; }
+    .chat-input-area { padding: 10px; }
+    .input-box { padding: 8px 10px; border-radius: 20px; }
+    .message-input { font-size: 16px; padding: 6px 8px; }
+    .message { font-size: 14px; padding: 10px 12px; max-width: 90%; }
+    .action-btn { padding: 6px; }
+    .action-btn svg { width: 18px; height: 18px; }
+    .transfer-messages { gap: 10px; }
+    .chat-container { padding: 12px; }
+
+    /* 侧边栏适配 */
+    aside#sidebar { width: 240px; margin-left: -240px; }
+    .sidebar-header { padding: 16px; font-size: 14px; }
+    .nav-item { padding: 10px 12px; }
 }
 
 @media (max-width: 420px) {
@@ -721,6 +739,24 @@ main#mainContent {
     .control-widget { padding: 6px; }
     .control-widget svg { width: 28px; height: 28px; }
     .widget-label { font-size: 8px; }
-    .big-qr-box { width: 180px; height: 200px; }
-    .big-qr-box canvas { max-width: 130px; max-height: 130px; }
+    .big-qr-box { width: 200px; height: 210px; }
+    .big-qr-box canvas { max-width: 170px; max-height: 170px; }
+    .room-input { min-width: 130px; font-size: 11px; }
+
+    /* 聊天界面进一步适配 */
+    .chat-top-bar { height: 44px; padding: 0 8px; }
+    .chat-title { font-size: 13px; margin-left: 8px; }
+    .chat-input-area { padding: 8px; }
+    .input-box { padding: 6px 8px; border-radius: 18px; }
+    .message-input { font-size: 16px; padding: 4px 6px; }
+    .message { font-size: 13px; padding: 8px 10px; max-width: 95%; }
+    .action-btn { padding: 4px; }
+    .action-btn svg { width: 16px; height: 16px; }
+    .transfer-messages { gap: 8px; }
+    .chat-container { padding: 8px; }
+
+    /* 侧边栏更窄 */
+    aside#sidebar { width: 200px; margin-left: -200px; }
+    .floating-menu-btn { top: 10px; left: 10px; padding: 6px; }
+    .settings-btn { top: 15px; right: 15px; width: 36px; height: 36px; font-size: 16px; }
 }

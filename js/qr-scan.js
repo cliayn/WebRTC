@@ -48,7 +48,13 @@ function generateCompressedQR() {
     const u = sdp.match(/a=ice-ufrag:(.+)/)[1];
     const p = sdp.match(/a=ice-pwd:(.+)/)[1];
     const f = sdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-    const iceCompact = localCandidates.map(c => {
+    const iceCompact = localCandidates
+        .filter(c => {
+            const parts = c.candidate.split(' ');
+            const typIdx = parts.indexOf('typ');
+            return typIdx > 1 && parseInt(parts[typIdx-1]) >= 1024;
+        })
+        .map(c => {
         const parts = c.candidate.split(' ');
         const typIdx = parts.indexOf('typ');
         return { ip: parts[typIdx-2], port: parseInt(parts[typIdx-1]), type: parts[typIdx+1] };
@@ -62,7 +68,7 @@ function generateCompressedQR() {
         addLog('[二维码] 压缩失败，使用JSON');
         const jsonStr = JSON.stringify(data);
         qrcodeDiv.innerHTML = '';
-        QRCode.toCanvas(document.createElement('canvas'), jsonStr, { width: 300 }, (err, canvas) => {
+        QRCode.toCanvas(document.createElement('canvas'), jsonStr, { width: 360 }, (err, canvas) => {
             if (err) return;
             qrcodeDiv.appendChild(canvas);
             addLog('[二维码] 已生成（JSON）');
@@ -73,7 +79,7 @@ function generateCompressedQR() {
     // 添加压缩标记前缀，方便识别
     const qrData = 'C:' + compressedBase64;
     qrcodeDiv.innerHTML = '';
-    QRCode.toCanvas(document.createElement('canvas'), qrData, { width: 300 }, (err, canvas) => {
+    QRCode.toCanvas(document.createElement('canvas'), qrData, { width: 360 }, (err, canvas) => {
         if (err) return;
         qrcodeDiv.appendChild(canvas);
         addLog('[二维码] 已生成（压缩版）');

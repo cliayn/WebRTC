@@ -77,6 +77,8 @@ var gatewayBurstRange = "192.168.43.1";          // 网关爆破范围，格式:
 var realtimeGatewayBurstEnabled = true;          // 是否启用实时网关爆破（检测到运营商NAT立即添加候选）
 var maxGatewayAttempts = 254;                    // 最大网关尝试数
 var manualIpFallbackEnabled = true;              // 是否启用手动IP回退
+
+// 运营商NAT检测正则配置统一由 assets/carrier-nat-patterns.json 管理
 var remoteIceCandidates = [];                    // 收集的远程ICE候选
 var gatewayBurstAttempted = false;               // 网关爆破是否已尝试
 var connectionFailureCount = 0;                  // 连接失败计数

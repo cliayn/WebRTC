@@ -2,20 +2,14 @@
 // 依赖的全局变量：pc, targetId, localCandidates, gatewayBurstRange, maxGatewayAttempts, carrierNatDetectionEnabled, manualIpFallbackEnabled
 // 依赖的全局函数：addLog, showModal, buildICECandidate
 
-// 运营商NAT检测模式（可从carrier-nat-patterns.json或高级设置加载）
+// 运营商NAT检测模式（统一从 assets/carrier-nat-patterns.json 加载）
 var carrierNatPatterns = [];           // 编译后的 RegExp 对象数组
 var carrierNatPatternConfigs = [];     // 用户可配置的 { name, regex } 数组
-var carrierNatPatternDefaults = [      // 默认配置（与 carrier-nat-patterns.json 同步）
-    { name: '10.0.0.0/8',        regex: '^10\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' },
-    { name: '172.16.0.0/12',     regex: '^172\\.(?:1[6-9]|2[0-9]|3[0-1])\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' },
-    { name: '100.64.0.0/10',     regex: '^100\\.(?:6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' }
-];
 
-// 初始化检测模式（从默认值加载）
+// 初始化检测模式（空启动，后续由 loadCarrierNatPatternsFromJson 从 JSON 文件加载）
 function initCarrierNatPatterns() {
-    carrierNatPatternConfigs = JSON.parse(JSON.stringify(carrierNatPatternDefaults));
     compileCarrierNatPatterns();
-    if (typeof addLog === 'function') addLog('[内网预测] 已加载 ' + carrierNatPatterns.length + ' 条检测规则');
+    if (typeof addLog === 'function') addLog('[内网预测] 等待从 carrier-nat-patterns.json 加载规则...');
 }
 
 // 重新编译检测模式
@@ -51,7 +45,7 @@ async function loadCarrierNatPatternsFromJson() {
             if (typeof addLog === 'function') addLog('[检测规则] 从文件加载 ' + carrierNatPatterns.length + ' 条规则');
         }
     } catch(e) {
-        if (typeof addLog === 'function') addLog('[检测规则] 无法加载配置文件，使用默认规则');
+        if (typeof addLog === 'function') addLog('[检测规则] 无法加载 carrier-nat-patterns.json，NAT检测将不可用');
     }
 }
 
