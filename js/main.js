@@ -179,9 +179,7 @@ var sidebarOpen = false;
 function toggleSidebar() {
     sidebarOpen = !sidebarOpen;
     var sidebar = document.getElementById('sidebar');
-    var overlay = document.getElementById('sidebarOverlay');
     if (sidebar) sidebar.classList.toggle('open', sidebarOpen);
-    if (overlay) overlay.classList.toggle('active', sidebarOpen);
 }
 
 function openSidebar() {
@@ -439,10 +437,6 @@ function sendFile(file) {
 
 document.getElementById('sidebarToggle').onclick = function() {
     toggleSidebar();
-};
-
-document.getElementById('sidebarOverlay').onclick = function() {
-    closeSidebar();
 };
 
 // 首页按钮

@@ -103,17 +103,6 @@ aside#sidebar.open { margin-left: 0; }
     display: none;
 }
 
-/* ===== 侧边栏遮罩层 ===== */
-.sidebar-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 1500;
-    display: none;
-    backdrop-filter: blur(2px);
-}
-.sidebar-overlay.active { display: block; }
-
 /* ===== 主内容区 ===== */
 main#mainContent {
     flex: 1;
