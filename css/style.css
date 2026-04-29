@@ -1,9 +1,21 @@
 /* ===== 基础重置 ===== */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* iOS输入框默认样式重置 */
+input, textarea {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    border-radius: 6px;
+}
+input::placeholder, textarea::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
 body {
     display: flex;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     background-color: #01060e;
     font-family: 'Segoe UI', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -14,6 +26,7 @@ body {
 aside#sidebar {
     width: 260px;
     height: 100vh;
+    height: 100dvh;
     background-color: #1a1b1e;
     color: #fff;
     flex-shrink: 0;
@@ -107,6 +120,7 @@ aside#sidebar.open { margin-left: 0; }
 main#mainContent {
     flex: 1;
     height: 100vh;
+    height: 100dvh;
     position: relative;
     min-width: 0;
     overflow: hidden;
@@ -136,6 +150,7 @@ main#mainContent {
     background: rgba(4, 26, 58, 0.7);
     border: 1px solid rgba(0, 243, 255, 0.4);
     border-radius: 8px;
+    -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px);
     transition: 0.3s;
     display: flex;
@@ -168,33 +183,81 @@ main#mainContent {
 /* ===== 房间号输入 ===== */
 .room-input-container {
     position: absolute;
-    top: 30px;
+    top: 24px;
     left: 50%;
     transform: translateX(-50%);
     text-align: center;
     z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+.room-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(4, 20, 45, 0.55);
+    border: 1px solid rgba(0, 243, 255, 0.15);
+    border-radius: 10px;
+    padding: 4px 4px 4px 14px;
+    transition: 0.3s;
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+}
+.room-input-row:focus-within {
+    border-color: rgba(0, 243, 255, 0.5);
+    background: rgba(4, 20, 45, 0.75);
+    box-shadow: 0 0 18px rgba(0, 243, 255, 0.12);
 }
 .room-input {
-    background: rgba(2, 11, 26, 0.7);
-    border: 1px solid rgba(0, 243, 255, 0.6);
-    padding: 10px 15px;
-    color: #fff;
+    background: transparent;
+    border: none;
+    padding: 6px 0;
+    color: rgba(200, 220, 240, 0.65);
     text-align: center;
     outline: none;
-    border-radius: 6px;
-    font-size: 14px;
-    min-width: 240px;
-    transition: 0.3s;
+    font-size: 13px;
+    min-width: 180px;
+    max-width: 220px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    letter-spacing: 0.5px;
+    transition: color 0.3s;
+}
+.room-input::placeholder {
+    color: rgba(255, 255, 255, 0.18);
+    font-family: 'Segoe UI', 'Roboto', -apple-system, sans-serif;
+    letter-spacing: 0;
 }
 .room-input:focus {
-    border-color: #00F3FF;
-    box-shadow: 0 0 20px rgba(0, 243, 255, 0.3);
+    color: rgba(220, 240, 255, 0.9);
+}
+.room-confirm-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 243, 255, 0.2);
+    background: rgba(0, 243, 255, 0.06);
+    color: rgba(0, 243, 255, 0.5);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.room-confirm-btn:hover {
+    background: rgba(0, 243, 255, 0.18);
+    border-color: rgba(0, 243, 255, 0.5);
+    color: #00F3FF;
+    box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
 }
 .room-status {
     font-size: 10px;
-    margin-top: 5px;
-    color: rgba(0, 243, 255, 0.5);
-    letter-spacing: 1px;
+    color: rgba(0, 243, 255, 0.4);
+    letter-spacing: 1.5px;
 }
 
 /* ===== 雷达中心区域 ===== */
@@ -250,7 +313,7 @@ main#mainContent {
     cursor: pointer;
     transition: 0.2s;
 }
-.peer-node:hover { filter: brightness(1.3); }
+.peer-node:hover circle { filter: brightness(1.3); }
 
 /* ===== 二维码展示框 ===== */
 .big-qr-box {
@@ -269,6 +332,7 @@ main#mainContent {
     opacity: 0;
     pointer-events: none;
     transition: 0.4s ease;
+    -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
     transform: scale(0.8);
 }
@@ -313,6 +377,7 @@ main#mainContent {
     flex-direction: column;
     align-items: center;
     box-shadow: 0 0 15px rgba(0, 243, 255, 0.1);
+    -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px);
     transition: 0.3s;
 }
@@ -440,10 +505,11 @@ main#mainContent {
 /* 聊天输入区 */
 .chat-input-area {
     padding: 20px;
+    padding-bottom: max(20px, env(safe-area-inset-bottom, 20px));
     display: flex;
     justify-content: center;
     background: #fff;
-    border-top: 1px solid #f0f0f0;
+    border-top: 1px solid #e0e0e0;
     flex-shrink: 0;
 }
 .input-box {
@@ -505,6 +571,7 @@ main#mainContent {
     left: 0;
     right: 0;
     background: rgba(4, 11, 26, 0.95);
+    -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(0, 243, 255, 0.3);
     border-radius: 20px 20px 0 0;
@@ -526,13 +593,18 @@ main#mainContent {
 }
 .server-config input, .stun-config input, .burst-config input {
     flex: 1;
-    background: rgba(2, 11, 26, 0.8);
-    border: 1px solid rgba(0, 243, 255, 0.4);
-    color: white;
+    background: rgba(15, 30, 60, 0.9);
+    border: 1px solid rgba(0, 243, 255, 0.5);
+    color: #fff;
     padding: 10px 14px;
     border-radius: 6px;
     outline: none;
     font-size: 13px;
+}
+.server-config input::placeholder,
+.stun-config input::placeholder,
+.burst-config input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
 }
 .regex-config {
     flex-direction: column;
@@ -559,24 +631,28 @@ main#mainContent {
 .regex-item-header { display: flex; gap: 6px; align-items: center; }
 .regex-name {
     flex: 1;
-    background: rgba(2, 11, 26, 0.8);
-    border: 1px solid rgba(0, 243, 255, 0.3);
-    color: white;
-    padding: 6px 12px;
+    background: rgba(15, 30, 60, 0.9);
+    border: 1px solid rgba(0, 243, 255, 0.4);
+    color: #fff;
+    padding: 8px 12px;
     border-radius: 4px;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     outline: none;
 }
 .regex-pattern {
     width: 100%;
-    background: rgba(2, 11, 26, 0.8);
-    border: 1px solid rgba(0, 243, 255, 0.3);
+    background: rgba(15, 30, 60, 0.9);
+    border: 1px solid rgba(0, 243, 255, 0.4);
     color: #00F3FF;
-    padding: 6px 12px;
+    padding: 8px 12px;
     border-radius: 4px;
     font-family: monospace;
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     outline: none;
+}
+.regex-name::placeholder,
+.regex-pattern::placeholder {
+    color: rgba(255, 255, 255, 0.4);
 }
 .btn-remove-regex {
     background: rgba(127, 29, 29, 0.6);
@@ -676,27 +752,132 @@ main#mainContent {
     text-align: center;
 }
 
+/* ===== 连接加载覆盖层 ===== */
+.loading-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 4500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+}
+.loading-card {
+    background: rgba(4, 11, 26, 0.9);
+    border: 1px solid rgba(0, 243, 255, 0.3);
+    border-radius: 16px;
+    padding: 32px 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    box-shadow: 0 0 40px rgba(0, 243, 255, 0.15);
+}
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(0, 243, 255, 0.2);
+    border-top-color: #00F3FF;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text {
+    color: #00F3FF;
+    font-size: 15px;
+    letter-spacing: 1px;
+}
+
 /* ===== 模态框 ===== */
 .modal-overlay {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.65);
     z-index: 5000;
     display: flex;
     align-items: center;
     justify-content: center;
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: fadeIn 0.2s ease;
 }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .modal-box {
-    background: rgba(4, 11, 26, 0.95);
-    border: 1px solid rgba(0, 243, 255, 0.4);
-    padding: 24px;
-    border-radius: 16px;
-    max-width: 320px;
+    background: linear-gradient(145deg, rgba(8, 22, 48, 0.98) 0%, rgba(4, 11, 26, 0.98) 100%);
+    border: 1px solid rgba(0, 243, 255, 0.35);
+    box-shadow: 0 0 60px rgba(0, 243, 255, 0.08), 0 0 120px rgba(0, 100, 200, 0.04);
+    padding: 32px 28px 24px;
+    border-radius: 20px;
+    max-width: 380px;
     width: 90%;
     text-align: center;
+    animation: modalPop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
-.modal-box h3 { color: #00F3FF; margin-bottom: 12px; }
-.modal-box p { color: rgba(255, 255, 255, 0.8); font-size: 14px; line-height: 1.5; }
+@keyframes modalPop { from { transform: scale(0.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.modal-box .modal-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(0, 243, 255, 0.08);
+    border: 1.5px solid rgba(0, 243, 255, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+    font-size: 24px;
+}
+.modal-box h3 {
+    color: #e0f7ff;
+    margin-bottom: 10px;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+.modal-box p {
+    color: rgba(200, 215, 230, 0.85);
+    font-size: 14px;
+    line-height: 1.65;
+    margin-bottom: 6px;
+}
+.modal-box .btn-row {
+    margin-top: 24px;
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.modal-box .btn {
+    padding: 10px 24px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: 0.2s;
+    border: 1px solid;
+    min-width: 90px;
+}
+.modal-box #modalCancelBtn {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+}
+.modal-box #modalCancelBtn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #fff;
+}
+.modal-box #modalConfirmBtn {
+    background: rgba(0, 180, 220, 0.15);
+    border-color: rgba(0, 243, 255, 0.5);
+    color: #00F3FF;
+}
+.modal-box #modalConfirmBtn:hover {
+    background: rgba(0, 200, 240, 0.25);
+    border-color: #00F3FF;
+    box-shadow: 0 0 20px rgba(0, 243, 255, 0.2);
+}
 
 .hidden { display: none !important; }
 
@@ -713,19 +894,76 @@ main#mainContent {
     .control-widget svg { width: 36px; height: 36px; }
     .big-qr-box { width: 240px; height: 240px; }
     .big-qr-box canvas { max-width: 200px; max-height: 200px; }
-    .room-input { min-width: 160px; font-size: 12px; }
+    .room-input-container { top: 16px; }
+    .room-input { min-width: 130px; font-size: 14px; }
+    .room-input-row { padding: 3px 3px 3px 10px; gap: 4px; }
+    .room-confirm-btn { width: 30px; height: 30px; font-size: 14px; }
+
+    /* 高级面板输入框移动端可见性 */
+    .advanced-panel { padding: 16px; }
+    .advanced-panel h3 { font-size: 14px; margin-bottom: 12px; }
+    .server-config input, .stun-config input, .burst-config input {
+        font-size: 16px;            /* 防iOS自动缩放 */
+        padding: 12px 14px;
+        background: rgba(15, 30, 60, 0.95);
+        border-color: rgba(0, 243, 255, 0.6);
+    }
+    .server-config input::placeholder,
+    .stun-config input::placeholder,
+    .burst-config input::placeholder {
+        color: rgba(255, 255, 255, 0.45);
+    }
+    .server-config, .stun-config, .burst-config {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .server-config > span, .stun-config > span, .burst-config > span {
+        font-size: 12px;
+        min-width: 80px;
+    }
+    .btn {
+        font-size: 14px;
+        padding: 10px 14px;
+    }
+    .regex-name {
+        font-size: 14px;
+        padding: 10px 12px;
+    }
+    .regex-pattern {
+        font-size: 13px;
+        padding: 10px 12px;
+    }
+    .log-box {
+        font-size: 0.8rem;
+        max-height: 120px;
+    }
 
     /* 聊天界面适配 */
     .chat-top-bar { height: 50px; padding: 0 10px; }
     .chat-title { font-size: 14px; margin-left: 10px; }
-    .chat-input-area { padding: 10px; }
-    .input-box { padding: 8px 10px; border-radius: 20px; }
-    .message-input { font-size: 16px; padding: 6px 8px; }
+    .chat-container { padding: 12px; }
+    .chat-input-area {
+        padding: 12px 12px;
+        padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
+        border-top: 1px solid #d0d0d0;
+    }
+    .input-box {
+        padding: 10px 12px;
+        border-radius: 24px;
+        border: 1.5px solid #bbb;
+        background: #fafafa;
+    }
+    .message-input {
+        font-size: 16px;
+        padding: 8px 10px;
+        min-height: 24px;
+    }
+    .message-input::placeholder { color: #999; }
     .message { font-size: 14px; padding: 10px 12px; max-width: 90%; }
     .action-btn { padding: 6px; }
     .action-btn svg { width: 18px; height: 18px; }
+    .send-btn-icon { padding: 8px; }
     .transfer-messages { gap: 10px; }
-    .chat-container { padding: 12px; }
 
     /* 侧边栏适配 */
     aside#sidebar { width: 240px; margin-left: -240px; }
@@ -741,19 +979,52 @@ main#mainContent {
     .widget-label { font-size: 8px; }
     .big-qr-box { width: 200px; height: 210px; }
     .big-qr-box canvas { max-width: 170px; max-height: 170px; }
-    .room-input { min-width: 130px; font-size: 11px; }
+    .room-input-container { top: 12px; }
+    .room-input { min-width: 110px; font-size: 13px; max-width: 160px; }
+    .room-input-row { padding: 2px 2px 2px 8px; gap: 3px; }
+    .room-confirm-btn { width: 28px; height: 28px; font-size: 13px; }
+
+    /* 高级面板输入框小屏进一步优化 */
+    .advanced-panel { padding: 12px; max-height: 70vh; }
+    .server-config input, .stun-config input, .burst-config input {
+        font-size: 16px;
+        padding: 10px 12px;
+        background: rgba(15, 30, 60, 0.95);
+        border-color: rgba(0, 243, 255, 0.6);
+    }
+    .regex-name { font-size: 14px; padding: 10px; }
+    .regex-pattern { font-size: 13px; padding: 10px; }
+    .log-box {
+        font-size: 0.75rem;
+        max-height: 100px;
+    }
 
     /* 聊天界面进一步适配 */
     .chat-top-bar { height: 44px; padding: 0 8px; }
     .chat-title { font-size: 13px; margin-left: 8px; }
-    .chat-input-area { padding: 8px; }
-    .input-box { padding: 6px 8px; border-radius: 18px; }
-    .message-input { font-size: 16px; padding: 4px 6px; }
-    .message { font-size: 13px; padding: 8px 10px; max-width: 95%; }
-    .action-btn { padding: 4px; }
-    .action-btn svg { width: 16px; height: 16px; }
-    .transfer-messages { gap: 8px; }
     .chat-container { padding: 8px; }
+    .chat-input-area {
+        padding: 10px 10px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+        border-top: 1px solid #d0d0d0;
+    }
+    .input-box {
+        padding: 8px 10px;
+        border-radius: 22px;
+        border: 1.5px solid #bbb;
+        background: #fafafa;
+    }
+    .message-input {
+        font-size: 16px;
+        padding: 6px 8px;
+        min-height: 22px;
+    }
+    .message-input::placeholder { color: #999; }
+    .message { font-size: 13px; padding: 8px 10px; max-width: 95%; }
+    .action-btn { padding: 5px; }
+    .action-btn svg { width: 18px; height: 18px; }
+    .send-btn-icon { padding: 7px; }
+    .transfer-messages { gap: 8px; }
 
     /* 侧边栏更窄 */
     aside#sidebar { width: 200px; margin-left: -200px; }

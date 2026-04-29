@@ -73,9 +73,9 @@ var addRegexPatternBtn = null;
 
 // ========== 内网预测和网关爆破配置 ==========
 var carrierNatDetectionEnabled = true;           // 是否启用运营商NAT检测
-var gatewayBurstRange = "192.168.43.1";          // 网关爆破范围，格式: "192.168.1-255.1"
+var gatewayBurstRange = "192.168.1-254.1;172.20.10.1";          // 网关爆破范围，用";"分隔多个，支持格式: 单IP、192.168.1-254(第三段范围)、192.168.1.1-254(第四段范围)
 var realtimeGatewayBurstEnabled = true;          // 是否启用实时网关爆破（检测到运营商NAT立即添加候选）
-var maxGatewayAttempts = 254;                    // 最大网关尝试数
+var maxGatewayAttempts = 255;                    // 最大网关尝试数
 var manualIpFallbackEnabled = true;              // 是否启用手动IP回退
 
 // 运营商NAT检测正则配置统一由 assets/carrier-nat-patterns.json 管理
@@ -88,5 +88,16 @@ var pendingReplacementIps = [];                  // 待处理的替换IP列表�
 var carrierNatRealTimeDetectionTriggered = false; // 实时检测是否已触发
 var carrierNatHandlingStage = 0;                 // 运营商NAT处理阶段: 0=未处理, 1=已自动爆破, 2=已询问用户, 3=全部失败
 var carrierNatDetectedIp = null;                 // 当前检测到的运营商NAT IP
+var localStunIp = null;                           // 本机STUN服务器返回的IPv4（srflx候选IP）
+var remoteStunIp = null;                          // 对方STUN服务器返回的IPv4（srflx候选IP）
+var burstEnabledByStunMatch = false;              // 是否通过STUN IP比对启用爆破（true=双方STUN IP相同，需爆破）
+
+// ========== Shadow PC 预热模块 ==========
+var shadowPc = null;                             // 隐藏的预热用RTCPeerConnection
+var shadowPcTimer = null;                        // 30秒刷新定时器
+var _shadowCandidateCache = [];                  // 缓存的热身候选 [{ip, port, type}]
+var shadowPcActive = false;                      // 预热模块生命周期标志
+var _embeddedIceSet = {};                        // 已在SDP中嵌入的候选 "ip:port" -> true 去重表
+var _burstInProgress = false;                    // 网关爆破是否正在进行（防ICE震荡）
 
 console.log('[配置] 全局变量已初始化');

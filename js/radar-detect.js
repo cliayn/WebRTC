@@ -35,6 +35,12 @@ function updateRadarPeers() {
         const angle = (index / Math.max(peerNodes.length, 1)) * 2 * Math.PI;
         const x = center.x + radius * Math.cos(angle);
         const y = center.y + radius * Math.sin(angle);
+        // 使用 <g> 包裹圆形和文本，使整个区域（包括用户ID文字）可点击
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'peer-node');
+        g.setAttribute('data-id', pid);
+        g.style.cursor = 'pointer';
+        g.addEventListener('click', () => requestConnection(pid));
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', x);
         circle.setAttribute('cy', y);
@@ -42,22 +48,21 @@ function updateRadarPeers() {
         circle.setAttribute('fill', '#0d9488');
         circle.setAttribute('stroke', '#5eead4');
         circle.setAttribute('stroke-width', '2');
-        circle.setAttribute('class', 'peer-node');
-        circle.setAttribute('data-id', pid);
-        circle.addEventListener('click', () => requestConnection(pid));
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('x', x);
         text.setAttribute('y', y+5);
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('fill', 'white');
         text.setAttribute('font-size', '12');
+        text.setAttribute('pointer-events', 'none');
         text.textContent = pid;
-        group.appendChild(circle);
-        group.appendChild(text);
+        g.appendChild(circle);
+        g.appendChild(text);
+        group.appendChild(g);
     });
 }
 
-// 请求连接到设备（自动连接，无需确认）
+// 请求连接到设备（需要对方确认）
 async function requestConnection(peerId) {
     targetId = peerId;
     // 重置运营商NAT处理状态（全新连接）
@@ -66,9 +71,15 @@ async function requestConnection(peerId) {
     carrierNatDetectedIp = null;
     carrierNatRealTimeDetectionTriggered = false;
     carrierNatReplacementMap = {};
+
+    // 显示加载覆盖层
+    if (window.showLoadingOverlay) {
+        window.showLoadingOverlay('正在请求与 ' + peerId + ' 连接，等待对方确认...');
+    }
+
     ws.send(JSON.stringify({ type: 'connect_request', target: peerId }));
-    radarStatus.textContent = `已发送连接请求给 ${peerId}，等待接受...`;
-    addLog(`[雷达] 自动连接请求发送至 ${peerId}`);
+    radarStatus.textContent = `已发送连接请求给 ${peerId}，等待对方确认...`;
+    addLog(`[雷达] 连接请求发送至 ${peerId}，等待对方确认`);
 }
 
 // 将函数挂载到window对象

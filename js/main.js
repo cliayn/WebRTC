@@ -98,6 +98,14 @@ function switchToHome() {
             addLog('[错误] 首页重连失败: ' + e);
         });
     }
+    // 重启Shadow PC预热（如果还没有激活连接）
+    var activeCount = 0;
+    for (var ck in connections) {
+        if (connections.hasOwnProperty(ck) && connections[ck].connected) activeCount++;
+    }
+    if (activeCount === 0 && window.shadowPcStart) {
+        window.shadowPcStart();
+    }
 }
 
 function switchToPeer(peerId) {
@@ -256,9 +264,11 @@ document.getElementById('homeSidebarItem').onclick = function() {
     switchToHome();
 };
 
-function showModal(title, message) {
+function showModal(title, message, icon) {
     modalTitle.textContent = title;
     modalMessage.textContent = message;
+    var iconEl = document.getElementById('modalIcon');
+    if (iconEl) iconEl.textContent = icon || '';
     modalOverlay.classList.remove('hidden');
     return new Promise((resolve) => {
         modalResolve = resolve;
@@ -274,6 +284,19 @@ function hideModal(result) {
 
 modalConfirmBtn.onclick = () => hideModal(true);
 modalCancelBtn.onclick = () => hideModal(false);
+
+var loadingOverlay = document.getElementById('loadingOverlay');
+var loadingText = document.getElementById('loadingText');
+
+function showLoadingOverlay(msg) {
+    if (loadingText) loadingText.textContent = msg || '正在建立连接...';
+    if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+}
+function hideLoadingOverlay() {
+    if (loadingOverlay) loadingOverlay.classList.add('hidden');
+}
+window.showLoadingOverlay = showLoadingOverlay;
+window.hideLoadingOverlay = hideLoadingOverlay;
 
 function addLog(msg) {
     if (logBox) {
@@ -323,20 +346,33 @@ function handleSignalingMessage(msg) {
     } else if (msg.type === 'same_network_clients') {
         peerNodes = msg.clients;
         updateRadarPeers();
-        radarStatus.textContent = `发现 ${peerNodes.length} 个设备`;
+        radarStatus.textContent = peerNodes.length ? `发现 ${peerNodes.length} 个设备` : '等待其他设备加入...';
     } else if (msg.type === 'new_peer') {
         if (!peerNodes.includes(msg.peer_id)) {
             peerNodes.push(msg.peer_id);
             updateRadarPeers();
+            radarStatus.textContent = `发现 ${peerNodes.length} 个设备`;
+            addLog(`[设备] ${msg.peer_id} 加入，当前共 ${peerNodes.length} 个`);
         }
     } else if (msg.type === 'peer_left') {
         peerNodes = peerNodes.filter(id => id !== msg.peer_id);
         updateRadarPeers();
+        radarStatus.textContent = peerNodes.length ? `发现 ${peerNodes.length} 个设备` : '等待其他设备加入...';
+        addLog(`[设备] ${msg.peer_id} 离开，当前共 ${peerNodes.length} 个`);
     } else if (msg.type === 'connect_request') {
         handleConnectRequest(msg.from);
+    } else if (msg.type === 'connect_reject') {
+        addLog('[连接] ' + (msg.from || '对方') + ' 拒绝了连接请求');
+        hideLoadingOverlay();
+        radarStatus.textContent = '连接被拒绝';
+        // 清理发起方连接条目
+        if (msg.from && connections[msg.from]) {
+            cleanupConnection(msg.from);
+        }
     } else if (msg.type === 'connect_accept') {
         startWebRTCAsInitiator(msg.from);
     } else if (msg.type === 'answer') {
+        showLoadingOverlay('正在与 ' + (msg.from || '对方') + ' 建立连接...');
         if (role === 'receiver') {
             if (msg.from && !connections[msg.from]) {
                 targetId = msg.from;
@@ -347,6 +383,7 @@ function handleSignalingMessage(msg) {
             handleRemoteAnswerCompressed(msg.payload);
         }
     } else if (msg.type === 'offer') {
+        showLoadingOverlay('正在与 ' + (msg.from || '对方') + ' 建立连接...');
         handleRemoteOfferCompressed(msg.payload, msg.from);
     } else if (msg.type === 'ice') {
         handleRemoteIce(msg.payload);
@@ -354,11 +391,33 @@ function handleSignalingMessage(msg) {
 }
 
 async function handleConnectRequest(fromId) {
+    addLog(`[连接] ${fromId} 正在请求连接...`);
+
+    // 弹出确认框，让用户确认是否是期望的连接对象
+    var confirmed = await showModal(
+        '连接确认',
+        fromId + ' 正在请求与您建立连接，请确认该 ID 是您期望的连接对象。',
+        '🔒'
+    );
+    if (!confirmed) {
+        addLog('[连接] 用户拒绝连接请求: ' + fromId);
+        ws.send(JSON.stringify({ type: 'connect_reject', target: fromId }));
+        return;
+    }
+
+    addLog('[连接] 用户确认连接请求: ' + fromId);
+
+    // 显示加载覆盖层
+    showLoadingOverlay('正在与 ' + fromId + ' 建立连接...');
+
     gatewayBurstAttempted = false;
     carrierNatHandlingStage = 0;
     carrierNatDetectedIp = null;
     carrierNatRealTimeDetectionTriggered = false;
     carrierNatReplacementMap = {};
+    burstEnabledByStunMatch = false;
+    localStunIp = null;
+    remoteStunIp = null;
 
     pendingIceCandidates = [];
     remoteIceCandidates = [];
@@ -369,7 +428,7 @@ async function handleConnectRequest(fromId) {
     role = 'sender';
 
     ws.send(JSON.stringify({ type: 'connect_accept', target: fromId }));
-    addLog(`[连接] 自动接受 ${fromId} 的连接请求`);
+    addLog(`[连接] 已接受 ${fromId} 的连接请求`);
 }
 
 async function startWebRTCAsInitiator(peerId) {
@@ -377,46 +436,80 @@ async function startWebRTCAsInitiator(peerId) {
     targetId = peerId;
     role = 'receiver';
     radarStatus.textContent = `连接 ${peerId}...`;
+
+    // 重置去重表和运营商NAT状态
+    _embeddedIceSet = {};
+    gatewayBurstAttempted = false;
+    carrierNatHandlingStage = 0;
+    carrierNatDetectedIp = null;
+    carrierNatRealTimeDetectionTriggered = false;
+    carrierNatReplacementMap = {};
+    burstEnabledByStunMatch = false;
+    localStunIp = null;
+    remoteStunIp = null;
+
     createPeerConnection();
     if (connections[peerId]) connections[peerId].pc = pc;
     createDataChannel();
     if (connections[peerId]) connections[peerId].dc = dc;
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await new Promise(resolve => {
-        const check = () => {
-            if (pc.iceGatheringState === 'complete') resolve();
-            else setTimeout(check, 100);
-        };
-        check();
-    });
+
+    // 不再等待ICE收集完成，立即提取SDP参数
     const sdp = pc.localDescription.sdp;
     const u = sdp.match(/a=ice-ufrag:(.+)/)[1];
     const p = sdp.match(/a=ice-pwd:(.+)/)[1];
     const f = sdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-    const iceCompact = localCandidates
-        .filter(c => {
-            const parts = c.candidate.split(' ');
-            const typIdx = parts.indexOf('typ');
-            return typIdx > 1 && parseInt(parts[typIdx-1]) >= 1024;
-        })
-        .map(c => {
-        const parts = c.candidate.split(' ');
-        const typIdx = parts.indexOf('typ');
-        return { ip: parts[typIdx-2], port: parseInt(parts[typIdx-1]), type: parts[typIdx+1] };
-    });
+
+    // 合并 Shadow PC 缓存候选 + 已收集到的本地候选
+    var iceCompact = [];
+
+    // 1. 先加入Shadow PC预热的候选（使用真实PC的ufrag重建）
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var si = 0; si < shadowCands.length; si++) {
+        var sc = shadowCands[si];
+        var key = sc.ip + ':' + sc.port;
+        if (!_embeddedIceSet[key]) {
+            _embeddedIceSet[key] = true;
+            iceCompact.push({ ip: sc.ip, port: sc.port, type: sc.type });
+        }
+    }
+
+    // 2. 再加入已收集到的真实候选（去重）
+    for (var li = 0; li < localCandidates.length; li++) {
+        var lc = localCandidates[li];
+        var lcParts = lc.candidate.split(' ');
+        var lcTypIdx = lcParts.indexOf('typ');
+        if (lcTypIdx > 1) {
+            var lcPort = parseInt(lcParts[lcTypIdx - 1], 10);
+            if (lcPort >= 1024) {
+                var lcIp = lcParts[lcTypIdx - 2];
+                var lcType = lcParts[lcTypIdx + 1];
+                var lcKey = lcIp + ':' + lcPort;
+                if (!_embeddedIceSet[lcKey]) {
+                    _embeddedIceSet[lcKey] = true;
+                    iceCompact.push({ ip: lcIp, port: lcPort, type: lcType });
+                }
+            }
+        }
+    }
+
+    // 提取本机STUN IP，随Offer发送
+    localStunIp = getLocalStunIp();
+    addLog('[STUN检测] 本机STUN IPv4: ' + (localStunIp || '无'));
+
     ws.send(JSON.stringify({
         type: 'offer',
         target: peerId,
-        payload: { u, p, f, ice: iceCompact }
+        payload: { u, p, f, ice: iceCompact, stunIp: localStunIp }
     }));
-    addLog(`[探查] 发送Offer给 ${peerId}`);
+    addLog(`[探查] 发送Offer给 ${peerId}（嵌入${iceCompact.length}个候选）`);
 }
 
 // ---------- WebRTC 核心 ----------
-function buildSDP(type, ufrag, pwd, fingerprint) {
+function buildSDP(type, ufrag, pwd, fingerprint, candidates) {
     const sessionId = Math.floor(Math.random() * 1e18);
-    return `v=0\r
+    var sdp = `v=0\r
 o=- ${sessionId} 2 IN IP4 127.0.0.1\r
 s=-\r
 t=0 0\r
@@ -434,12 +527,40 @@ a=mid:0\r
 a=sctp-port:5000\r
 a=max-message-size:262144\r
 `;
+    // 嵌入in-band ICE候选（Vanilla ICE变体）
+    if (candidates && candidates.length > 0) {
+        for (var ci = 0; ci < candidates.length; ci++) {
+            var c = candidates[ci];
+            var candStr = buildICECandidate(c.ip, c.port, c.type, ufrag);
+            sdp += 'a=' + candStr + '\r\n';
+        }
+    }
+    return sdp;
 }
 
-function buildICECandidate(ip, port, type, ufrag) {
-    const foundation = Math.floor(Math.random() * 2e9);
-    const priority = (type === 'host') ? (ip.includes(':') ? 2113939711 : 2113937151) : 0;
+function buildICECandidate(ip, port, type, ufrag, options) {
+    var opts = options || {};
+    var foundation = opts.foundation || Math.floor(Math.random() * 2e9);
+    var priority;
+    if (opts.priority !== undefined) {
+        priority = opts.priority;
+    } else if (type === 'host') {
+        priority = ip.includes(':') ? 2113939711 : 2113937151;
+    } else if (type === 'srflx') {
+        priority = 1694498815;
+    } else if (type === 'prflx') {
+        priority = 100;
+    } else {
+        priority = 0;
+    }
     return `candidate:${foundation} 1 udp ${priority} ${ip} ${port} typ ${type} generation 0 ufrag ${ufrag} network-cost 999`;
+}
+
+// 构建爆破候选字符串（降低priority确保浏览器优先尝试真实链路）
+function buildICECandidate_Burst(ip, port, type, ufrag) {
+    // host优先级 2113937151，爆破使用低1000的优先级
+    var burstPriority = (type === 'host') ? (ip.includes(':') ? 2113938711 : 2113936151) : 1694497815;
+    return buildICECandidate(ip, port, type, ufrag, { priority: burstPriority });
 }
 
 function createPeerConnection() {
@@ -457,12 +578,24 @@ function createPeerConnection() {
 
     pc.onconnectionstatechange = () => {
         const state = pc.connectionState;
+        var now = Date.now();
+
+        // 防ICE震荡：爆破期间忽略快速checking切换（<200ms间隔）
+        if (_burstInProgress && state === 'checking' && pc._lastConnStateTime && (now - pc._lastConnStateTime < 200)) {
+            return;
+        }
+        pc._lastConnState = state;
+        pc._lastConnStateTime = now;
+
         addLog(`[连接状态] ${state}`);
         var connStateR = document.getElementById('connStateR');
         if (connStateR) connStateR.textContent = state;
 
         if (state === 'connected') {
+            hideLoadingOverlay();
             connectionFailureCount = 0;
+            // 连接建立，停止Shadow PC
+            if (window.shadowPcStop) window.shadowPcStop();
             var peerId = createdPcForPeerId || targetId;
             if (peerId && connections[peerId]) {
                 connections[peerId].pc = pc;
@@ -495,8 +628,19 @@ function createPeerConnection() {
                 }
             }
         } else if (state === 'failed') {
+            hideLoadingOverlay();
             connectionFailureCount++;
             addLog(`[连接失败] 失败次数: ${connectionFailureCount}`);
+
+            // 如果启用了网关爆破，提示用户调整爆破IP范围
+            if (burstEnabledByStunMatch && gatewayBurstAttempted) {
+                addLog('[连接失败] 提示：当前爆破范围可能不包含正确的网关IP，请在「高级设置」中调整「网关爆破范围」后重试');
+                addLog('[连接失败] 当前爆破范围: ' + gatewayBurstRange);
+                // 显示弹窗提示
+                if (typeof showToast === 'function') {
+                    showToast('连接失败，建议调整高级设置中的网关爆破IP范围后重试');
+                }
+            }
 
             var cleanupId = createdPcForPeerId || targetId;
             if (cleanupId) {
@@ -530,12 +674,26 @@ function createPeerConnection() {
         if (e.candidate) {
             localCandidates.push(e.candidate);
             addLog(`[本地ICE] ${e.candidate.candidate}`);
+            // 过滤低端口候选（端口 < 1024 为系统保留端口），不发送给对端
             if (ws && ws.readyState === WebSocket.OPEN && targetId) {
-                ws.send(JSON.stringify({
-                    type: 'ice',
-                    target: targetId,
-                    payload: e.candidate.candidate
-                }));
+                var _cparts = e.candidate.candidate.split(' ');
+                var _cport = _cparts.length >= 6 ? parseInt(_cparts[5], 10) : 0;
+                if (_cport >= 1024) {
+                    // 检查是否已在Offer/Answer SDP中嵌入过
+                    var _cip = _cparts.length >= 5 ? _cparts[4] : '';
+                    var _ckey = _cip + ':' + _cport;
+                    if (_embeddedIceSet && _embeddedIceSet[_ckey]) {
+                        addLog(`[本地ICE] 跳过已嵌入候选 ${_ckey}`);
+                        return;
+                    }
+                    ws.send(JSON.stringify({
+                        type: 'ice',
+                        target: targetId,
+                        payload: e.candidate.candidate
+                    }));
+                } else {
+                    addLog(`[本地ICE] 跳过低端口候选(端口${_cport})`);
+                }
             }
         } else {
             addLog('[ICE收集] 完成');
@@ -566,6 +724,9 @@ async function generateOffer() {
         }
         localCandidates = [];
 
+        // 重置去重表
+        _embeddedIceSet = {};
+
         addLog('[Offer] 初始化 PeerConnection...');
         createPeerConnection();
 
@@ -578,7 +739,7 @@ async function generateOffer() {
         addLog('[Offer] 设置本地描述...');
         await pc.setLocalDescription(offer);
 
-        addLog('[Offer] 等待 ICE 收集...');
+        addLog('[Offer] ICE收集已启动（不等待完成，异步收集）');
     } catch (err) {
         addLog('[错误] generateOffer 内部崩溃: ' + err.message);
         throw err;
@@ -586,22 +747,59 @@ async function generateOffer() {
 }
 
 async function handleRemoteAnswerCompressed(compressed) {
-    const { u, p, f } = compressed;
-    const answerSdp = buildSDP('answer', u, p, f);
+    const { u, p, f, ice, stunIp: remoteStun } = compressed;
+    const answerCandidates = ice || [];
+
+    // STUN IP比对：双方STUN IPv4相同 → 同一运营商NAT → 启用爆破
+    localStunIp = getLocalStunIp();
+    remoteStunIp = remoteStun || null;
+    if (localStunIp && remoteStunIp && localStunIp === remoteStunIp) {
+        burstEnabledByStunMatch = true;
+        addLog('[STUN检测] 双方STUN IP相同 (' + localStunIp + ')，启用网关爆破');
+    } else {
+        burstEnabledByStunMatch = false;
+        addLog('[STUN检测] 本机=' + (localStunIp || '无') + ' 对方=' + (remoteStunIp || '无') + '，关闭网关爆破');
+    }
+
+    const answerSdp = buildSDP('answer', u, p, f, answerCandidates);
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     addLog('[设置远程Answer] 成功');
     while (pendingIceCandidates.length) {
         const cand = pendingIceCandidates.shift();
-        await pc.addIceCandidate({ candidate: cand, sdpMid: '0', sdpMLineIndex: 0 }).catch(e=>addLog('[缓存ICE添加失败] '+e));
+        await handleRemoteIce(cand);
     }
+
 }
 
 async function handleRemoteOfferCompressed(compressed, fromId) {
     addLog(`[探查] 处理来自 ${fromId} 的offer`);
     targetId = fromId;
     role = 'sender';
-    const { u, p, f, ice } = compressed;
-    const offerSdp = buildSDP('offer', u, p, f);
+
+    // 重置去重表和运营商NAT状态
+    _embeddedIceSet = {};
+    gatewayBurstAttempted = false;
+    carrierNatHandlingStage = 0;
+    carrierNatDetectedIp = null;
+    carrierNatRealTimeDetectionTriggered = false;
+    carrierNatReplacementMap = {};
+    burstEnabledByStunMatch = false;
+    localStunIp = null;
+    remoteStunIp = null;
+
+    const { u, p, f, ice, stunIp: remoteStun } = compressed;
+    const offerCandidates = ice || [];
+
+    // STUN IP比对：双方STUN IPv4相同 → 同一运营商NAT → 启用爆破
+    localStunIp = getLocalStunIp();
+    remoteStunIp = remoteStun || null;
+    if (localStunIp && remoteStunIp && localStunIp === remoteStunIp) {
+        burstEnabledByStunMatch = true;
+        addLog('[STUN检测] 双方STUN IP相同 (' + localStunIp + ')，启用网关爆破');
+    } else {
+        burstEnabledByStunMatch = false;
+        addLog('[STUN检测] 本机=' + (localStunIp || '无') + ' 对方=' + (remoteStunIp || '无') + '，关闭网关爆破');
+    }
 
     var savedPendingIce = pendingIceCandidates.slice();
     var savedRemoteIce = remoteIceCandidates.slice();
@@ -609,25 +807,75 @@ async function handleRemoteOfferCompressed(compressed, fromId) {
     createPeerConnection();
     if (connections[fromId]) connections[fromId].pc = pc;
     remoteIceCandidates = savedRemoteIce;
+
+    // 构建SDP并嵌入in-band候选
+    const offerSdp = buildSDP('offer', u, p, f, offerCandidates);
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
-    for (const ic of ice) {
-        await pc.addIceCandidate({ candidate: buildICECandidate(ic.ip, ic.port, ic.type, u), sdpMid: '0', sdpMLineIndex: 0 });
+
+    // 先处理缓存的pending ICE（trickle ICE有正确的端口，优先触发爆破）
+    for (var pIdx = 0; pIdx < savedPendingIce.length; pIdx++) {
+        await handleRemoteIce(savedPendingIce[pIdx]);
+    }
+    // 也处理在setRemoteDescription期间到达的trickle ICE候选
+    while (pendingIceCandidates.length) {
+        const cand = pendingIceCandidates.shift();
+        await handleRemoteIce(cand);
     }
 
-    for (var i = 0; i < savedPendingIce.length; i++) {
-        await pc.addIceCandidate({ candidate: savedPendingIce[i], sdpMid: '0', sdpMLineIndex: 0 }).catch(e=>addLog('[缓存ICE添加失败] '+e));
+    // 再作为fallback显式添加in-band候选（跳过爆破，仅添加真实候选）
+    for (var icIdx = 0; icIdx < offerCandidates.length; icIdx++) {
+        var ic = offerCandidates[icIdx];
+        await handleRemoteIce(buildICECandidate(ic.ip, ic.port, ic.type, u), true);
     }
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+
+
     const ansSdp = answer.sdp;
     const ansU = ansSdp.match(/a=ice-ufrag:(.+)/)[1];
     const ansP = ansSdp.match(/a=ice-pwd:(.+)/)[1];
     const ansF = ansSdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-    await new Promise(r => setTimeout(r, 500));
-    const answerCompressed = { u: ansU, p: ansP, f: ansF };
+
+    // 收集应答方候选（Shadow + 已收集的真实候选）
+    var answerIceCompact = [];
+
+    // 1. Shadow缓存
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var si = 0; si < shadowCands.length; si++) {
+        var sc = shadowCands[si];
+        var skey = sc.ip + ':' + sc.port;
+        if (!_embeddedIceSet[skey]) {
+            _embeddedIceSet[skey] = true;
+            answerIceCompact.push({ ip: sc.ip, port: sc.port, type: sc.type });
+        }
+    }
+
+    // 2. 已收集的真实候选
+    for (var lai = 0; lai < localCandidates.length; lai++) {
+        var alc = localCandidates[lai];
+        var aParts = alc.candidate.split(' ');
+        var aTypIdx = aParts.indexOf('typ');
+        if (aTypIdx > 1) {
+            var aPort = parseInt(aParts[aTypIdx - 1], 10);
+            if (aPort >= 1024) {
+                var aIp = aParts[aTypIdx - 2];
+                var aType = aParts[aTypIdx + 1];
+                var aKey = aIp + ':' + aPort;
+                if (!_embeddedIceSet[aKey]) {
+                    _embeddedIceSet[aKey] = true;
+                    answerIceCompact.push({ ip: aIp, port: aPort, type: aType });
+                }
+            }
+        }
+    }
+
+    // 短暂延迟收集额外候选
+    await new Promise(function(r) { setTimeout(r, 500); });
+
+    const answerCompressed = { u: ansU, p: ansP, f: ansF, ice: answerIceCompact, stunIp: localStunIp };
     ws.send(JSON.stringify({ type: 'answer', target: targetId, payload: answerCompressed }));
-    addLog(`[探查] 发送Answer给 ${targetId}`);
+    addLog(`[探查] 发送Answer给 ${targetId}（嵌入${answerIceCompact.length}个候选）`);
 }
 
 async function reconnectWithCarrierNatReplacement(detectedCarrierNatIp, replacementIpOrIps, port) {
@@ -686,59 +934,219 @@ function replaceIceCandidateIp(candidateStr) {
     return parts.join(' ');
 }
 
+// 获取本机STUN服务器返回的IPv4（srflx候选IP）
+// 优先从Shadow缓存获取，其次从已收集的真实候选获取
+function getLocalStunIp() {
+    // 1. 从Shadow PC缓存查找srflx
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var i = 0; i < shadowCands.length; i++) {
+        if (shadowCands[i].type === 'srflx' && shadowCands[i].ip && !shadowCands[i].ip.includes(':')) {
+            return shadowCands[i].ip;
+        }
+    }
+    // 2. 从已收集的真实候选查找srflx
+    for (var j = 0; j < localCandidates.length; j++) {
+        var parts = localCandidates[j].candidate.split(' ');
+        var typIdx = parts.indexOf('typ');
+        if (typIdx > 0 && parts[typIdx + 1] === 'srflx') {
+            var ip = parts[typIdx - 2];
+            if (ip && !ip.includes(':')) return ip;
+        }
+    }
+    return null;
+}
+
 function extractLocalUfrag() {
     if (!pc || !pc.localDescription || !pc.localDescription.sdp) return '';
     var match = pc.localDescription.sdp.match(/a=ice-ufrag:(.+)/);
     return match ? match[1].trim() : '';
 }
 
-async function handleRemoteIce(candidateStr) {
+// 共享的运营商NAT网关爆破逻辑
+// 由 handleRemoteIce / handleRemoteAnswerCompressed / handleRemoteOfferCompressed 调用
+// remoteUfrag: 远端ICE ufrag（来自远端SDP或候选字符串）
+// 触发条件：burstEnabledByStunMatch=true（双方STUN IP相同），或STUN不可用时回退到正则匹配
+function triggerCarrierNatBurst(detectedIp, detectedPort, remoteUfrag) {
+    if (!carrierNatDetectionEnabled || gatewayBurstAttempted) return;
+    if (!pc) return;
+
+    // STUN检测逻辑：优先STUN比对，STUN不可用时回退正则
+    var shouldBurst = false;
+    var burstReason = '';
+    if (burstEnabledByStunMatch && window.isCarrierNatIp && window.isCarrierNatIp(detectedIp)) {
+        shouldBurst = true;
+        burstReason = 'STUN比对命中';
+    } else if (burstEnabledByStunMatch) {
+        // STUN相同但IP不是运营商NAT（如.local），跳过爆破
+        addLog('[运营商NAT] STUN相同但IP ' + detectedIp + ' 不是运营商NAT，跳过爆破');
+    } else if (localStunIp === null && remoteStunIp === null) {
+        // STUN不可用（双方都没有srflx），回退到正则检测
+        if (window.isCarrierNatIp && window.isCarrierNatIp(detectedIp)) {
+            shouldBurst = true;
+            burstReason = 'STUN不可用，正则回退检测';
+        }
+    } else if (localStunIp === null || remoteStunIp === null) {
+        // 一方有STUN一方没有，谨慎起见用正则回退
+        if (window.isCarrierNatIp && window.isCarrierNatIp(detectedIp)) {
+            shouldBurst = true;
+            burstReason = 'STUN部分可用，正则回退检测';
+        }
+    }
+    // STUN都可用但IP不同 → 不爆破（burstEnabledByStunMatch=false 且双方都有STUN）
+
+    if (!shouldBurst) {
+        if (localStunIp && remoteStunIp && localStunIp !== remoteStunIp) {
+            addLog('[运营商NAT] STUN IP不同（本机=' + localStunIp + ' 对方=' + remoteStunIp + '），跳过爆破');
+        }
+        return;
+    }
+
+    // 使用远端ufrag（与test版本一致，爆破候选模拟远端候选）
+    if (!remoteUfrag) {
+        // 尝试从远端描述提取
+        if (pc.remoteDescription && pc.remoteDescription.sdp) {
+            var rm = pc.remoteDescription.sdp.match(/a=ice-ufrag:(.+)/);
+            if (rm) remoteUfrag = rm[1].trim();
+        }
+    }
+    if (!remoteUfrag) {
+        addLog('[网关爆破] 无法获取远端ufrag');
+        return;
+    }
+
+    carrierNatDetectedIp = detectedIp;
+    carrierNatHandlingStage = 1;
+    addLog('[运营商NAT] ' + burstReason + '，远端host=' + detectedIp + ':' + detectedPort + '，启动网关爆破');
+
+    var rangeConfigs = window.parseGatewayRange(gatewayBurstRange);
+    if (!rangeConfigs || !rangeConfigs.length) {
+        addLog('[网关爆破] 网关范围解析失败');
+        return;
+    }
+
+    var gatewayIps = window.generateGatewayIps(rangeConfigs);
+
+    if (!gatewayIps.length) {
+        addLog('[网关爆破] 无法生成网关IP');
+        return;
+    }
+
+    addLog('[网关爆破] 准备注入 ' + gatewayIps.length + ' 个候选（端口=' + detectedPort + '，远端ufrag=' + remoteUfrag + '）');
+    // 打印前10个爆破IP便于验证配置
+    addLog('[网关爆破] 爆破范围示例: ' + gatewayIps.slice(0, 10).join(', ') + (gatewayIps.length > 10 ? ' ...' : ''));
+
+    gatewayBurstAttempted = true;
+    _burstInProgress = true;
+
+    var BURST_BATCH_SIZE = 50;
+    var BURST_BATCH_DELAY = 200;
+    var burstIndex = 0;
+    var _remoteUfrag = remoteUfrag; // 闭包捕获
+
+    function injectBurstBatch() {
+        var batch = gatewayIps.slice(burstIndex, burstIndex + BURST_BATCH_SIZE);
+        burstIndex += BURST_BATCH_SIZE;
+
+        // 记录每批的第一个候选用于调试
+        var firstCandStr = buildICECandidate_Burst(batch[0], detectedPort, 'host', _remoteUfrag);
+        addLog('[网关爆破] 批次' + (Math.ceil(burstIndex / BURST_BATCH_SIZE)) + ' 示例: ' + firstCandStr);
+
+        var promises = batch.map(function(ip) {
+            var burstCandStr = buildICECandidate_Burst(ip, detectedPort, 'host', _remoteUfrag);
+            return pc.addIceCandidate({
+                candidate: burstCandStr,
+                sdpMid: '0',
+                sdpMLineIndex: 0
+            }).catch(function() { /* 单个候选失败静默忽略 */ });
+        });
+
+        Promise.all(promises).then(function() {
+            if (burstIndex < gatewayIps.length) {
+                setTimeout(injectBurstBatch, BURST_BATCH_DELAY);
+            } else {
+                _burstInProgress = false;
+                addLog('[网关爆破] 全部 ' + gatewayIps.length + ' 个候选已注入（端口=' + detectedPort + '）');
+            }
+        });
+    }
+
+    injectBurstBatch();
+}
+
+// 检查远程候选数组中的运营商NAT并触发爆破（用于in-band候选）
+function checkInBandCandidatesForCarrierNat(iceArray) {
+    if (!iceArray || !iceArray.length) return;
+    if (!carrierNatDetectionEnabled || gatewayBurstAttempted) return;
+
+    // 提取远端ufrag（in-band候选使用远端SDP的ufrag）
+    var remoteUfrag = '';
+    if (pc && pc.remoteDescription && pc.remoteDescription.sdp) {
+        var rm = pc.remoteDescription.sdp.match(/a=ice-ufrag:(.+)/);
+        if (rm) remoteUfrag = rm[1].trim();
+    }
+
+    for (var i = 0; i < iceArray.length; i++) {
+        var cand = iceArray[i];
+        if (cand.type === 'host') {
+            addLog('[In-Band检测] 远端host候选 ' + cand.ip + ':' + cand.port + '，尝试触发爆破');
+            triggerCarrierNatBurst(cand.ip, cand.port, remoteUfrag);
+            return; // 只触发一次
+        }
+    }
+}
+
+async function handleRemoteIce(candidateStr, skipBurst) {
     var parts = candidateStr.split(' ');
     var originalIp = parts.length >= 8 ? parts[4] : null;
     var candidatePort = parts.length >= 8 ? parseInt(parts[5], 10) : NaN;
+    var typIdx = parts.indexOf('typ');
+    var candidateType = typIdx > 0 ? parts[typIdx + 1] : '';
 
-    if (carrierNatDetectionEnabled && !gatewayBurstAttempted && !carrierNatRealTimeDetectionTriggered) {
-        if (originalIp && window.isCarrierNatIp && window.isCarrierNatIp(originalIp)) {
-            if (!carrierNatDetectedIp) {
-                carrierNatDetectedIp = originalIp;
-            }
-            if (!carrierNatReplacementMap[originalIp]) {
-                if (window.setupRealtimeReplacement) {
-                    var replacementIp = window.setupRealtimeReplacement(originalIp);
-                    if (replacementIp) {
-                        carrierNatRealTimeDetectionTriggered = true;
-                        addLog('[运营商NAT] 实时替换: ' + originalIp + ' → ' + replacementIp);
-                    }
-                }
-            }
-        }
+    // 过滤低端口候选（端口 < 1024 为系统保留端口）
+    if (!isNaN(candidatePort) && candidatePort < 1024) {
+        addLog('[远程ICE] 忽略低端口候选(端口' + candidatePort + ')');
+        return;
     }
 
-    var replacedCandidate = replaceIceCandidateIp(candidateStr);
-    var replacedIp = replacedCandidate.split(' ')[4];
-
-    if (originalIp !== replacedIp) {
-        addLog('[ICE替换] ' + originalIp + ' -> ' + replacedIp);
-    }
-
+    // 缓存原始候选
     remoteIceCandidates.push(candidateStr);
 
+    // 无PC：缓冲等待
     if (!pc) {
-        pendingIceCandidates.push(replacedCandidate);
+        pendingIceCandidates.push(candidateStr);
         addLog('[ICE缓存] 无PeerConnection，等待offer');
         return;
     }
 
-    if (pc.remoteDescription && pc.remoteDescription.type) {
-        try {
-            await pc.addIceCandidate({ candidate: replacedCandidate, sdpMid: '0', sdpMLineIndex: 0 });
-            addLog('[添加远程ICE] 成功' + (originalIp !== replacedIp ? '（已替换IP）' : ''));
-        } catch (e) {
-            addLog('[添加远程ICE失败] ' + e);
+    // 无远程描述：缓冲等待
+    if (!pc.remoteDescription || !pc.remoteDescription.type) {
+        pendingIceCandidates.push(candidateStr);
+        addLog('[ICE缓存] 等待远程描述');
+        return;
+    }
+
+    // STEP 1: 始终添加真实的远程候选（不做IP替换！）
+    try {
+        await pc.addIceCandidate({
+            candidate: candidateStr,
+            sdpMid: '0',
+            sdpMLineIndex: 0
+        });
+        addLog('[添加远程ICE] ' + originalIp + ':' + candidatePort + ' typ ' + candidateType);
+    } catch (e) {
+        addLog('[添加远程ICE失败] ' + e);
+        return; // 真实候选失败则不爆破
+    }
+
+    // STEP 2: 运营商NAT检测 → 网关爆破注入（仅trickle ICE，跳过in-band候选）
+    // 从候选字符串中提取远端ufrag（爆破候选使用远端ufrag，与test版本一致）
+    if (!skipBurst && candidateType === 'host' && originalIp) {
+        var remoteUfrag = '';
+        var ufragIdx = parts.indexOf('ufrag');
+        if (ufragIdx > 0 && ufragIdx + 1 < parts.length) {
+            remoteUfrag = parts[ufragIdx + 1];
         }
-    } else {
-        pendingIceCandidates.push(replacedCandidate);
-        addLog('[ICE缓存] 等待远程描述' + (originalIp !== replacedIp ? '（已替换IP）' : ''));
+        triggerCarrierNatBurst(originalIp, candidatePort, remoteUfrag);
     }
 }
 
@@ -781,6 +1189,10 @@ roomIdInput.onchange = function() {
 };
 roomIdInput.onkeypress = function(e) {
     if (e.key === 'Enter') roomIdInput.onchange();
+};
+applyRoomIdBtn.onclick = function() {
+    roomIdInput.onchange();
+    roomIdInput.blur();  // 确认后收起键盘（移动端）
 };
 
 applyBurstRangeBtn.onclick = () => {
@@ -945,12 +1357,15 @@ window.handleConnectRequest = handleConnectRequest;
 window.startWebRTCAsInitiator = startWebRTCAsInitiator;
 window.buildSDP = buildSDP;
 window.buildICECandidate = buildICECandidate;
+window.buildICECandidate_Burst = buildICECandidate_Burst;
 window.createPeerConnection = createPeerConnection;
 window.generateOffer = generateOffer;
 window.handleRemoteAnswerCompressed = handleRemoteAnswerCompressed;
 window.handleRemoteOfferCompressed = handleRemoteOfferCompressed;
 window.handleRemoteIce = handleRemoteIce;
+window.getLocalStunIp = getLocalStunIp;
 window.extractLocalUfrag = extractLocalUfrag;
+window.checkInBandCandidatesForCarrierNat = checkInBandCandidatesForCarrierNat;
 window.attemptGatewayBurstOnFailure = attemptGatewayBurstOnFailure;
 window.reconnectWithCarrierNatReplacement = reconnectWithCarrierNatReplacement;
 window.renderRegexPatternList = renderRegexPatternList;
@@ -987,7 +1402,35 @@ addLog('🌐 系统就绪，自动启动雷达探测...');
 // ====== 自动启动雷达探测 ======
 setTimeout(async function() {
     try {
-        addLog('[系统] 正在自动连接信令服务器...');
+        // 1. 先启动Shadow PC预热，获取STUN IPv4作为房间号
+        if (!roomId && window.shadowPcStart) {
+            try {
+                addLog('[系统] 正在预检测网络信息...');
+                window.shadowPcStart();
+                // 等待Shadow PC收集ICE候选（最长3.5秒超时）
+                var waited = 0;
+                while (waited < 3500) {
+                    await new Promise(function(r) { setTimeout(r, 300); });
+                    waited += 300;
+                    var stunIp = getLocalStunIp();
+                    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+                    if (stunIp || shadowCands.length > 0) break;
+                }
+                var autoStunIp = getLocalStunIp();
+                if (autoStunIp) {
+                    roomId = autoStunIp;
+                    if (roomIdInput) roomIdInput.value = autoStunIp;
+                    addLog('[系统] 自动检测到STUN IP作为房间号: ' + autoStunIp);
+                } else {
+                    addLog('[系统] 未检测到STUN IP，将按连接IP匹配');
+                }
+            } catch (e) {
+                addLog('[系统] 网络预检测失败: ' + e);
+            }
+        }
+
+        // 2. 连接到信令服务器（此时roomId已就绪）
+        addLog('[系统] 正在连接信令服务器...');
         await startRadarMode();
         addLog('[成功] 雷达模式已激活');
     } catch(e) {

@@ -7,7 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-    <link rel="stylesheet" href="css/style.css?v=5">
+    <link rel="stylesheet" href="css/style.css?v=2.0.1">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
 <body>
@@ -47,7 +47,10 @@
 
         <!-- 房间号输入 -->
         <div class="room-input-container">
-            <input type="text" id="roomIdInput" class="room-input" placeholder="房间号（留空按IP匹配）" maxlength="20">
+            <div class="room-input-row">
+                <input type="text" id="roomIdInput" class="room-input" placeholder="roomId = 自动检测..." maxlength="24">
+                <button type="button" class="room-confirm-btn" id="applyRoomIdBtn" title="确认房间号">↵</button>
+            </div>
             <div class="room-status" id="radarStatus">INITIALIZING...</div>
         </div>
 
@@ -115,7 +118,7 @@
     </div>
     <div class="burst-config">
         <span>💥 爆破范围</span>
-        <input type="text" id="burstRangeInput" placeholder="例: 192.168.1-255.1">
+        <input type="text" id="burstRangeInput" placeholder="例: 192.168.1-254;172.20.10.1">
         <button class="btn" id="applyBurstRangeBtn">应用</button>
     </div>
     <div class="regex-config">
@@ -175,23 +178,33 @@
     </div>
 </div>
 
+<!-- ====== 连接加载覆盖层 ====== -->
+<div class="loading-overlay hidden" id="loadingOverlay">
+    <div class="loading-card">
+        <div class="loading-spinner"></div>
+        <span class="loading-text" id="loadingText">正在建立连接...</span>
+    </div>
+</div>
+
 <!-- ====== 通用模态框 ====== -->
 <div class="modal-overlay hidden" id="modalOverlay">
     <div class="modal-box">
+        <div class="modal-icon" id="modalIcon">🔗</div>
         <h3 id="modalTitle">提示</h3>
         <p id="modalMessage"></p>
-        <div class="btn-row" style="margin-top:20px;">
+        <div class="btn-row">
             <button class="btn" id="modalCancelBtn">取消</button>
-            <button class="btn btn-primary" id="modalConfirmBtn">确定</button>
+            <button class="btn" id="modalConfirmBtn">确定</button>
         </div>
     </div>
 </div>
 
-<script src="js/config.js?v=5"></script>
-<script src="js/predict-internal.js?v=5"></script>
-<script src="js/qr-scan.js?v=5"></script>
-<script src="js/radar-detect.js?v=5"></script>
-<script src="js/transfer.js?v=5"></script>
-<script src="js/main.js?v=5"></script>
+<script src="js/config.js?v=2.0.1"></script>
+<script src="js/shadow-pc.js?v=2.0.1"></script>
+<script src="js/predict-internal.js?v=2.0.1"></script>
+<script src="js/qr-scan.js?v=2.0.1"></script>
+<script src="js/radar-detect.js?v=2.0.1"></script>
+<script src="js/transfer.js?v=2.0.1"></script>
+<script src="js/main.js?v=2.0.1"></script>
 </body>
 </html>

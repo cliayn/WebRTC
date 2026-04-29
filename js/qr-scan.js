@@ -48,18 +48,48 @@ function generateCompressedQR() {
     const u = sdp.match(/a=ice-ufrag:(.+)/)[1];
     const p = sdp.match(/a=ice-pwd:(.+)/)[1];
     const f = sdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-    const iceCompact = localCandidates
-        .filter(c => {
-            const parts = c.candidate.split(' ');
-            const typIdx = parts.indexOf('typ');
-            return typIdx > 1 && parseInt(parts[typIdx-1]) >= 1024;
-        })
-        .map(c => {
-        const parts = c.candidate.split(' ');
+
+    var iceCompact = [];
+    var embeddedSet = {};
+
+    // 1. Shadow PC 预热候选
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var si = 0; si < shadowCands.length; si++) {
+        var sc = shadowCands[si];
+        var skey = sc.ip + ':' + sc.port;
+        if (!embeddedSet[skey]) {
+            embeddedSet[skey] = true;
+            iceCompact.push({ ip: sc.ip, port: sc.port, type: sc.type });
+        }
+    }
+
+    // 2. 已收集的真实候选
+    for (var ci = 0; ci < localCandidates.length; ci++) {
+        const parts = localCandidates[ci].candidate.split(' ');
         const typIdx = parts.indexOf('typ');
-        return { ip: parts[typIdx-2], port: parseInt(parts[typIdx-1]), type: parts[typIdx+1] };
-    });
-    const data = { id: myId, u, p, f, ice: iceCompact };
+        if (typIdx > 1 && parseInt(parts[typIdx - 1], 10) >= 1024) {
+            var lcIp = parts[typIdx - 2];
+            var lcPort = parseInt(parts[typIdx - 1], 10);
+            var lcType = parts[typIdx + 1];
+            var lcKey = lcIp + ':' + lcPort;
+            if (!embeddedSet[lcKey]) {
+                embeddedSet[lcKey] = true;
+                iceCompact.push({ ip: lcIp, port: lcPort, type: lcType });
+            }
+        }
+    }
+
+    // 提取本机STUN IP
+    var stunIp = window.getLocalStunIp ? window.getLocalStunIp() : null;
+    if (!stunIp) {
+        // fallback: 从iceCompact中查找srflx
+        for (var si2 = 0; si2 < iceCompact.length; si2++) {
+            if (iceCompact[si2].type === 'srflx') { stunIp = iceCompact[si2].ip; break; }
+        }
+    }
+    addLog('[STUN检测] 本机STUN IPv4: ' + (stunIp || '无'));
+
+    const data = { id: myId, u, p, f, ice: iceCompact, stunIp: stunIp };
 
     // 压缩数据
     const compressedBase64 = compressData(data);
@@ -116,34 +146,93 @@ async function handleScannedCompressed(compressedStr) {
         carrierNatDetectedIp = null;
         carrierNatRealTimeDetectionTriggered = false;
         carrierNatReplacementMap = {};
+        burstEnabledByStunMatch = false;
+        localStunIp = null;
+        remoteStunIp = null;
         connectionFailureCount = 0;
+
+        // 显示加载覆盖层
+        if (window.showLoadingOverlay) {
+            window.showLoadingOverlay('正在与 ' + data.id + ' 建立连接...');
+        }
 
         targetId = data.id;
         role = 'sender';
+        // 重置去重表
+        if (window._embeddedIceSet) _embeddedIceSet = {};
+
         // 创建连接条目，使扫码连接也显示在侧边栏
         if (window.createConnectionEntry) {
             window.createConnectionEntry(targetId, role);
         }
-        const { u, p, f, ice } = data;
-        const offerSdp = buildSDP('offer', u, p, f);
-        createPeerConnection();
-        await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
-        // 添加远程ICE
-        for (const ic of ice) {
-            await pc.addIceCandidate({ candidate: buildICECandidate(ic.ip, ic.port, ic.type, u), sdpMid: '0', sdpMLineIndex: 0 });
+        const { u, p, f, ice, stunIp: remoteStun } = data;
+        const offerCandidates = ice || [];
+
+        // STUN IP比对：双方STUN IPv4相同 → 同一运营商NAT → 启用爆破
+        localStunIp = window.getLocalStunIp ? window.getLocalStunIp() : null;
+        remoteStunIp = remoteStun || null;
+        if (localStunIp && remoteStunIp && localStunIp === remoteStunIp) {
+            burstEnabledByStunMatch = true;
+            addLog('[STUN检测] 双方STUN IP相同 (' + localStunIp + ')，启用网关爆破');
+        } else {
+            burstEnabledByStunMatch = false;
+            addLog('[STUN检测] 本机=' + (localStunIp || '无') + ' 对方=' + (remoteStunIp || '无') + '，关闭网关爆破');
         }
-        // 添加缓存ICE
+
+        createPeerConnection();
+        // 构建SDP并嵌入in-band候选
+        const offerSdp = buildSDP('offer', u, p, f, offerCandidates);
+        await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+
+        // 先处理缓存ICE（trickle ICE有正确的端口，优先触发爆破）
         while (pendingIceCandidates.length) {
             const cand = pendingIceCandidates.shift();
-            await pc.addIceCandidate({ candidate: cand, sdpMid: '0', sdpMLineIndex: 0 }).catch(e=>addLog('[缓存ICE添加失败] '+e));
+            await handleRemoteIce(cand);
+        }
+        // 再作为fallback显式添加in-band候选（跳过爆破，仅添加真实候选）
+        for (var icIdx = 0; icIdx < offerCandidates.length; icIdx++) {
+            var ic = offerCandidates[icIdx];
+            await handleRemoteIce(buildICECandidate(ic.ip, ic.port, ic.type, u), true);
         }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+
+
         const ansSdp = answer.sdp;
         const ansU = ansSdp.match(/a=ice-ufrag:(.+)/)[1];
         const ansP = ansSdp.match(/a=ice-pwd:(.+)/)[1];
         const ansF = ansSdp.match(/a=fingerprint:sha-256 (.+)/)[1];
-        const answerCompressed = { u: ansU, p: ansP, f: ansF, ice: [] };
+
+        // 收集应答方候选
+        var answerIceCompact = [];
+        var aEmbeddedSet = {};
+        var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+        for (var si = 0; si < shadowCands.length; si++) {
+            var sc = shadowCands[si];
+            var skey = sc.ip + ':' + sc.port;
+            if (!aEmbeddedSet[skey]) {
+                aEmbeddedSet[skey] = true;
+                answerIceCompact.push({ ip: sc.ip, port: sc.port, type: sc.type });
+            }
+        }
+        for (var lai = 0; lai < localCandidates.length; lai++) {
+            var alc = localCandidates[lai];
+            var aParts = alc.candidate.split(' ');
+            var aTypIdx = aParts.indexOf('typ');
+            if (aTypIdx > 1) {
+                var aPort = parseInt(aParts[aTypIdx - 1], 10);
+                if (aPort >= 1024) {
+                    var aIp = aParts[aTypIdx - 2];
+                    var aKey = aIp + ':' + aPort;
+                    if (!aEmbeddedSet[aKey]) {
+                        aEmbeddedSet[aKey] = true;
+                        answerIceCompact.push({ ip: aIp, port: aPort, type: aParts[aTypIdx + 1] });
+                    }
+                }
+            }
+        }
+
+        const answerCompressed = { u: ansU, p: ansP, f: ansF, ice: answerIceCompact, stunIp: localStunIp };
         ws.send(JSON.stringify({ type: 'answer', target: targetId, payload: answerCompressed }));
         addLog('[发送Answer] 完成');
     } catch (e) {

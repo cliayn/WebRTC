@@ -58,60 +58,126 @@ function isCarrierNatIp(ip) {
     return carrierNatPatterns.some(pattern => pattern.test(ip));
 }
 
-// 解析网关爆破范围字符串 "192.168.1-255.1"
-// 返回IP前缀和后缀范围数组
+// 解析网关爆破范围字符串，支持";"分隔多个IP/范围
+// 支持格式:
+//   单IP: "172.20.10.1"
+//   第三段范围(旧格式): "192.168.1-254.1" → 生成 192.168.1.1 ~ 192.168.254.1
+//   第三段范围(简写): "192.168.1-254" → 同上，第四段默认.1
+//   第四段范围: "192.168.1.1-254" → 生成 192.168.1.1 ~ 192.168.1.254
+//   多段组合: "192.168.1-254;172.20.10.1"
+// 返回配置数组，失败返回空数组
 function parseGatewayRange(rangeStr) {
-    // 格式: "192.168.1-255.1" 或 "192.168.1.1"
-    const parts = rangeStr.split('.');
-    if (parts.length !== 4) {
-        addLog('[网关解析] 格式错误，应为4段: ' + rangeStr);
-        return null;
+    if (!rangeStr || typeof rangeStr !== 'string') return [];
+
+    var segments = rangeStr.split(';');
+    var configs = [];
+
+    for (var s = 0; s < segments.length; s++) {
+        var seg = segments[s].trim();
+        if (!seg) continue;
+
+        var parts = seg.split('.');
+        var rangeIdx = -1;
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].includes('-')) { rangeIdx = i; break; }
+        }
+
+        if (rangeIdx === -1 && parts.length === 4) {
+            // 单IP: 172.20.10.1
+            var valid = parts.every(function(p) {
+                var n = parseInt(p, 10);
+                return !isNaN(n) && n >= 0 && n <= 255;
+            });
+            if (valid) {
+                configs.push({ type: 'single', ip: seg });
+            } else {
+                addLog('[网关解析] IP格式无效: ' + seg);
+            }
+        } else if (rangeIdx >= 0) {
+            var rangeParts = parts[rangeIdx].split('-');
+            var start = parseInt(rangeParts[0], 10);
+            var end = parseInt(rangeParts[1], 10);
+            if (isNaN(start) || isNaN(end) || start < 0 || start > 255 || end < 0 || end > 255) {
+                addLog('[网关解析] 范围无效: ' + seg);
+                continue;
+            }
+
+            // 构建前缀（范围之前的段）
+            var prefixParts = [];
+            for (var j = 0; j < rangeIdx; j++) {
+                var n = parseInt(parts[j], 10);
+                if (isNaN(n) || n < 0 || n > 255) { prefixParts = null; break; }
+                prefixParts.push(parts[j]);
+            }
+            if (!prefixParts) { addLog('[网关解析] 前缀无效: ' + seg); continue; }
+            var prefix = prefixParts.join('.');
+
+            // 构建后缀（范围之后的段）
+            var suffixOctets = [];
+            for (var k = rangeIdx + 1; k < parts.length; k++) {
+                var n2 = parseInt(parts[k], 10);
+                if (isNaN(n2) || n2 < 0 || n2 > 255) { suffixOctets = null; break; }
+                suffixOctets.push(parts[k]);
+            }
+            if (!suffixOctets) { addLog('[网关解析] 后缀无效: ' + seg); continue; }
+
+            // 3段简写格式如 "192.168.1-254": rangeIdx=2 但没有后缀 → 默认第四段为.1
+            if (rangeIdx === 2 && parts.length === 3 && suffixOctets.length === 0) {
+                suffixOctets = ['1'];
+            }
+
+            // 验证总段数合理（前缀 + 1段范围 + 后缀 = 4段）
+            if (prefixParts.length + 1 + suffixOctets.length !== 4) {
+                addLog('[网关解析] 段数不正确(需4段): ' + seg + ' (前缀' + prefixParts.length + '+范围1+后缀' + suffixOctets.length + ')');
+                continue;
+            }
+
+            configs.push({
+                type: 'range',
+                prefix: prefix,
+                rangeStart: start,
+                rangeEnd: end,
+                rangePosition: rangeIdx,
+                suffixOctets: suffixOctets
+            });
+        } else {
+            addLog('[网关解析] 无法识别的格式: ' + seg);
+        }
     }
 
-    const prefix = parts[0] + '.' + parts[1]; // "192.168"
-    const thirdPart = parts[2]; // "1-255" 或 "1"
-    const fourthPart = parts[3]; // "1"
-
-    let start, end;
-    if (thirdPart.includes('-')) {
-        const [startStr, endStr] = thirdPart.split('-');
-        start = parseInt(startStr, 10);
-        end = parseInt(endStr, 10);
+    if (configs.length === 0) {
+        addLog('[网关解析] 未解析出有效配置');
     } else {
-        start = end = parseInt(thirdPart, 10);
+        addLog('[网关解析] 解析出 ' + configs.length + ' 个IP范围/地址');
     }
-
-    if (isNaN(start) || isNaN(end) || start < 0 || start > 255 || end < 0 || end > 255) {
-        addLog('[网关解析] 第三段范围无效: ' + thirdPart);
-        return null;
-    }
-
-    const fourth = parseInt(fourthPart, 10);
-    if (isNaN(fourth) || fourth < 0 || fourth > 255) {
-        addLog('[网关解析] 第四段无效: ' + fourthPart);
-        return null;
-    }
-
-    return {
-        prefix: prefix,
-        thirdStart: start,
-        thirdEnd: end,
-        fourth: fourth
-    };
+    return configs;
 }
 
-// 生成网关IP列表
-function generateGatewayIps(rangeConfig) {
-    const ips = [];
-    const { prefix, thirdStart, thirdEnd, fourth } = rangeConfig;
+// 生成网关IP列表（支持多范围配置）
+function generateGatewayIps(rangeConfigs) {
+    if (!Array.isArray(rangeConfigs)) {
+        // 兼容旧调用（单配置对象）
+        rangeConfigs = [rangeConfigs];
+    }
 
-    for (let third = thirdStart; third <= thirdEnd; third++) {
-        ips.push(`${prefix}.${third}.${fourth}`);
-        // 限制数量
+    var ips = [];
+
+    for (var i = 0; i < rangeConfigs.length; i++) {
+        var cfg = rangeConfigs[i];
+
+        if (cfg.type === 'single') {
+            ips.push(cfg.ip);
+        } else if (cfg.type === 'range') {
+            var suffixStr = cfg.suffixOctets.length > 0 ? '.' + cfg.suffixOctets.join('.') : '';
+            for (var v = cfg.rangeStart; v <= cfg.rangeEnd; v++) {
+                ips.push(cfg.prefix + '.' + v + suffixStr);
+                if (ips.length >= maxGatewayAttempts) break;
+            }
+        }
         if (ips.length >= maxGatewayAttempts) break;
     }
 
-    addLog(`[网关生成] 生成 ${ips.length} 个网关IP`);
+    addLog('[网关生成] 生成 ' + ips.length + ' 个网关IP');
     return ips;
 }
 
@@ -157,27 +223,19 @@ function addGatewayIceCandidates(gatewayIps, originalPort, ufrag) {
     });
 }
 
-// 实时运营商NAT替换：检测到运营商NAT IP后立即建立IP替换映射
-// 后续所有ICE候选中的该IP将被replaceIceCandidateIp自动替换为网关IP
-// 不再添加平行候选，而是直接替换，类似旧版爆破逻辑
+// 【已废弃】实时运营商NAT替换函数
+// 旧版逻辑会替换真实IP，导致连接失败。新逻辑在 main.js 的 handleRemoteIce() 中：
+// 先添加真实候选，再批量注入爆破候选（相同端口 + 降低priority）
+// 保留此函数仅为向后兼容，不再执行任何实际操作
 function setupRealtimeReplacement(carrierNatIp) {
-    if (!carrierNatDetectionEnabled) return null;
-
-    var rangeConfig = parseGatewayRange(gatewayBurstRange);
-    if (!rangeConfig) { addLog('[实时替换] 网关范围解析失败'); return null; }
-
-    var gatewayIps = generateGatewayIps(rangeConfig);
-    if (!gatewayIps.length) { addLog('[实时替换] 无网关IP生成'); return null; }
-
-    var replacementIp = gatewayIps[0];
-    carrierNatReplacementMap[carrierNatIp] = replacementIp;
-    addLog('[实时替换] ' + carrierNatIp + ' → ' + replacementIp + '（原IP丢弃）');
-    return replacementIp;
+    if (typeof addLog === 'function') addLog('[实时替换] 已废弃，新逻辑由 handleRemoteIce 处理');
+    return null;
 }
 
-// 旧版实时爆破函数（已废弃，保留兼容）
+// 旧版实时爆破函数（已废弃）
 function triggerRealtimeGatewayBurst(carrierNatIp, remotePort, remoteCandidateStr) {
-    return setupRealtimeReplacement(carrierNatIp) !== null;
+    if (typeof addLog === 'function') addLog('[实时爆破] 已废弃，新逻辑由 handleRemoteIce 处理');
+    return false;
 }
 
 // 检测对方IP并触发网关爆破
@@ -200,14 +258,14 @@ function triggerGatewayBurst(remoteIps, remotePort, ufrag) {
     addLog(`[网关爆破] 检测到运营商NAT IP: ${carrierNatIp}`);
 
     // 解析网关范围
-    const rangeConfig = parseGatewayRange(gatewayBurstRange);
-    if (!rangeConfig) {
+    var rangeConfigs = parseGatewayRange(gatewayBurstRange);
+    if (!rangeConfigs.length) {
         addLog('[网关爆破] 网关范围解析失败');
         return false;
     }
 
     // 生成网关IP
-    const gatewayIps = generateGatewayIps(rangeConfig);
+    const gatewayIps = generateGatewayIps(rangeConfigs);
     if (!gatewayIps.length) {
         addLog('[网关爆破] 无网关IP生成');
         return false;
