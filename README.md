@@ -1,0 +1,1 @@
+文件传输用了大佬的流模式[StreamSaver.js](https://github.com/jimmywarting/StreamSaver.js)
