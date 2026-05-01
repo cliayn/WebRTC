@@ -7,7 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-    <link rel="stylesheet" href="css/style.css?v=2.0.1">
+    <link rel="stylesheet" href="css/style.css?v=2.3.0">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
 <body>
@@ -157,6 +157,16 @@
             <div class="transfer-messages">
                 <div class="message-wrapper peer-msg"><div class="message">✨ 连接已建立</div></div>
             </div>
+            <div class="transfer-progress hidden">
+                <div class="transfer-progress-header">
+                    <span class="transfer-progress-name"></span>
+                    <span class="transfer-progress-percent">0%</span>
+                </div>
+                <div class="transfer-progress-track">
+                    <div class="transfer-progress-fill"></div>
+                </div>
+                <span class="transfer-progress-speed"></span>
+            </div>
         </div>
         <div class="chat-input-area">
             <div class="input-box">
@@ -199,12 +209,21 @@
     </div>
 </div>
 
-<script src="js/config.js?v=2.0.1"></script>
-<script src="js/shadow-pc.js?v=2.0.1"></script>
-<script src="js/predict-internal.js?v=2.0.1"></script>
-<script src="js/qr-scan.js?v=2.0.1"></script>
-<script src="js/radar-detect.js?v=2.0.1"></script>
-<script src="js/transfer.js?v=2.0.1"></script>
-<script src="js/main.js?v=2.0.1"></script>
+<script src="js/streamsaver.js?v=2.3.0"></script>
+<script>
+// 注册 StreamSaver Service Worker（流式落盘，防止大文件内存溢出）
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js?v=2.3.0', { scope: '/' }).catch(function(e) {
+        console.warn('[SW] Service Worker 注册失败（流式下载降级不可用）:', e);
+    });
+}
+</script>
+<script src="js/config.js?v=2.3.0"></script>
+<script src="js/shadow-pc.js?v=2.3.0"></script>
+<script src="js/predict-internal.js?v=2.3.0"></script>
+<script src="js/qr-scan.js?v=2.3.0"></script>
+<script src="js/radar-detect.js?v=2.3.0"></script>
+<script src="js/transfer.js?v=2.3.0"></script>
+<script src="js/main.js?v=2.3.0"></script>
 </body>
 </html>

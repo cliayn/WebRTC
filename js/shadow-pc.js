@@ -92,6 +92,8 @@ async function _shadowPcRefresh() {
         }
 
         _shadowCandidateCache = deduped;
+        // 检测STUN IP变化并打印（仅在变化时）
+        if (window.logStunInfoOnce) window.logStunInfoOnce();
         if (typeof addLog === 'function') {
             var hostCount = deduped.filter(function (c) { return c.type === 'host'; }).length;
             var srflxCount = deduped.filter(function (c) { return c.type === 'srflx'; }).length;

@@ -232,6 +232,14 @@ main#mainContent {
 .room-input:focus {
     color: rgba(220, 240, 255, 0.9);
 }
+/* 状态 1：默认背景层（灰度）—— 自动检测的IP作为水印 */
+.room-input.status-ghost {
+    color: rgba(180, 200, 220, 0.35) !important;
+}
+/* 状态 2：激活输入（正常）—— 用户正在输入 */
+.room-input.status-active {
+    color: rgba(220, 240, 255, 0.9) !important;
+}
 .room-confirm-btn {
     width: 32px;
     height: 32px;
@@ -549,6 +557,58 @@ main#mainContent {
 .send-btn-icon:hover { background: #0056b3; }
 
 .file-label-btn { cursor: pointer; }
+
+/* ====== 文件传输进度条 ====== */
+.transfer-progress {
+    padding: 10px 14px;
+    margin: 6px 0;
+    background: #f0f7ff;
+    border: 1px solid #cce0ff;
+    border-radius: 8px;
+    transition: opacity 0.3s;
+}
+.transfer-progress.hidden { display: none; }
+.transfer-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.transfer-progress-name {
+    font-size: 12px;
+    color: #555;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 70%;
+}
+.transfer-progress-percent {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a73e8;
+    flex-shrink: 0;
+}
+.transfer-progress-track {
+    width: 100%;
+    height: 6px;
+    background: #dce8f5;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.transfer-progress-fill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #1a73e8, #4285f4);
+    border-radius: 3px;
+    transition: width 0.15s ease-out;
+}
+.transfer-progress-speed {
+    display: block;
+    font-size: 11px;
+    color: #999;
+    margin-top: 4px;
+    text-align: right;
+}
 
 .message-input {
     flex: 1;

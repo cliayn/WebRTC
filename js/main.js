@@ -708,7 +708,6 @@ function createPeerConnection() {
         var peerId = createdPcForPeerId || targetId;
         if (peerId && connections[peerId]) {
             connections[peerId].dc = dc;
-            // 直接使用per-peer版本，不再调用旧版setupDataChannel
             setupDataChannelForPeer(peerId, dc);
         }
     };
@@ -956,6 +955,77 @@ function getLocalStunIp() {
     return null;
 }
 
+// 获取本机STUN服务器返回的完整IPv6（srflx候选IP）
+function getLocalStunIPv6() {
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var i = 0; i < shadowCands.length; i++) {
+        if (shadowCands[i].type === 'srflx' && shadowCands[i].ip && shadowCands[i].ip.includes(':')) {
+            return shadowCands[i].ip;
+        }
+    }
+    for (var j = 0; j < localCandidates.length; j++) {
+        var parts = localCandidates[j].candidate.split(' ');
+        var typIdx = parts.indexOf('typ');
+        if (typIdx > 0 && parts[typIdx + 1] === 'srflx') {
+            var ip = parts[typIdx - 2];
+            if (ip && ip.includes(':')) return ip;
+        }
+    }
+    return null;
+}
+
+// 获取本机STUN服务器返回的IPv6前四组（srflx候选IP），例如 240e:1234:5678:abcd
+function getLocalStunIPv6Prefix() {
+    function expandIPv6(ip) {
+        if (ip.includes('::')) {
+            var parts = ip.split('::');
+            var left = parts[0] ? parts[0].split(':') : [];
+            var right = parts[1] ? parts[1].split(':') : [];
+            var missing = 8 - left.length - right.length;
+            for (var z = 0; z < missing; z++) left.push('0');
+            return left.concat(right).join(':');
+        }
+        return ip;
+    }
+    var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
+    for (var i = 0; i < shadowCands.length; i++) {
+        if (shadowCands[i].type === 'srflx' && shadowCands[i].ip && shadowCands[i].ip.includes(':')) {
+            var groups = expandIPv6(shadowCands[i].ip).split(':');
+            if (groups.length >= 4) return groups.slice(0, 4).join(':');
+        }
+    }
+    for (var j = 0; j < localCandidates.length; j++) {
+        var parts = localCandidates[j].candidate.split(' ');
+        var typIdx = parts.indexOf('typ');
+        if (typIdx > 0 && parts[typIdx + 1] === 'srflx') {
+            var ip = parts[typIdx - 2];
+            if (ip && ip.includes(':')) {
+                var groups = expandIPv6(ip).split(':');
+                if (groups.length >= 4) return groups.slice(0, 4).join(':');
+            }
+        }
+    }
+    return null;
+}
+
+// STUN IP 变更检测日志（只在值变化时打印，不打印端口）
+var _lastLoggedStunIPv4 = undefined;
+var _lastLoggedStunIPv6 = undefined;
+function logStunInfoOnce() {
+    var v4 = getLocalStunIp();
+    var v6 = getLocalStunIPv6();
+    if (v4 !== _lastLoggedStunIPv4 || v6 !== _lastLoggedStunIPv6) {
+        console.log(
+            '%c[STUN]%c 本机公网地址 %cIPv4:%c ' + (v4 || '无') + '  %cIPv6:%c ' + (v6 || '无'),
+            'color:#0ff', '', 'color:#aaa', 'color:#fff', 'color:#aaa', 'color:#fff'
+        );
+        if (v4 !== _lastLoggedStunIPv4) addLog('[STUN] IPv4: ' + (v4 || '无'));
+        if (v6 !== _lastLoggedStunIPv6) addLog('[STUN] IPv6: ' + (v6 || '无'));
+        _lastLoggedStunIPv4 = v4;
+        _lastLoggedStunIPv6 = v6;
+    }
+}
+
 function extractLocalUfrag() {
     if (!pc || !pc.localDescription || !pc.localDescription.sdp) return '';
     var match = pc.localDescription.sdp.match(/a=ice-ufrag:(.+)/);
@@ -1172,28 +1242,73 @@ applyStunBtn.onclick = () => {
     stunServer = stunServerInput.value.trim();
     addLog(`STUN服务器: ${stunServer}`);
 };
-roomIdInput.onchange = function() {
-    const value = roomIdInput.value.trim();
-    roomId = value;
-    if (value) {
-        addLog(`房间号已设置为: ${value}`);
+// ---- 房间号输入框交互逻辑（test.html 风格） ----
+// 保存自动检测的默认值（用于 ghost 态还原）
+var _roomDefaultVal = roomId || '';
+
+// 1. 获取焦点：清空默认值，切换为激活态
+roomIdInput.addEventListener('focus', function() {
+    if (this.value === _roomDefaultVal && this.classList.contains('status-ghost')) {
+        this.value = '';
+        this.classList.remove('status-ghost');
+        this.classList.add('status-active');
+    }
+});
+
+// 2. 失去焦点：自动判断还原或提交
+roomIdInput.addEventListener('blur', function(e) {
+    if (e.relatedTarget === applyRoomIdBtn) return;
+    var val = this.value.trim();
+    if (val === '') {
+        // 没有输入内容 → 还原到上一个已确认的房间号（ghost 态）
+        var revertVal = _roomDefaultVal || getLocalStunIPv6Prefix() || getLocalStunIp() || '';
+        if (revertVal) {
+            this.value = revertVal;
+            this.classList.add('status-ghost');
+            this.classList.remove('status-active');
+        }
+    } else if (val !== _roomDefaultVal) {
+        // 有输入且与当前房间号不同 → 自动提交，提交后回到 ghost 态
+        roomId = val;
+        _roomDefaultVal = val;
+        this.classList.remove('status-active');
+        this.classList.add('status-ghost');
+        addLog('房间号已设置为: ' + val);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
+        }
+    }
+});
+
+// 3. 提交按钮：确认房间号
+function applyRoomId() {
+    var val = roomIdInput.value.trim();
+    if (val) {
+        roomId = val;
+        _roomDefaultVal = val;
+        roomIdInput.classList.remove('status-active');
+        roomIdInput.classList.add('status-ghost');
+        addLog('房间号已设置为: ' + val);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: roomId } }));
         }
     } else {
+        // 空值也允许，清空房间号
+        roomId = '';
+        _roomDefaultVal = '';
+        roomIdInput.value = '';
+        roomIdInput.classList.remove('status-ghost', 'status-active');
         addLog('已清除房间号，将按连接IP匹配');
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join_room', payload: { room_id: '' } }));
         }
     }
-};
-roomIdInput.onkeypress = function(e) {
-    if (e.key === 'Enter') roomIdInput.onchange();
-};
-applyRoomIdBtn.onclick = function() {
-    roomIdInput.onchange();
-    roomIdInput.blur();  // 确认后收起键盘（移动端）
-};
+    roomIdInput.blur();
+}
+applyRoomIdBtn.onclick = applyRoomId;
+roomIdInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') applyRoomId();
+});
 
 applyBurstRangeBtn.onclick = () => {
     const value = burstRangeInput.value.trim();
@@ -1364,6 +1479,9 @@ window.handleRemoteAnswerCompressed = handleRemoteAnswerCompressed;
 window.handleRemoteOfferCompressed = handleRemoteOfferCompressed;
 window.handleRemoteIce = handleRemoteIce;
 window.getLocalStunIp = getLocalStunIp;
+window.getLocalStunIPv6 = getLocalStunIPv6;
+window.getLocalStunIPv6Prefix = getLocalStunIPv6Prefix;
+window.logStunInfoOnce = logStunInfoOnce;
 window.extractLocalUfrag = extractLocalUfrag;
 window.checkInBandCandidatesForCarrierNat = checkInBandCandidatesForCarrierNat;
 window.attemptGatewayBurstOnFailure = attemptGatewayBurstOnFailure;
@@ -1402,7 +1520,7 @@ addLog('🌐 系统就绪，自动启动雷达探测...');
 // ====== 自动启动雷达探测 ======
 setTimeout(async function() {
     try {
-        // 1. 先启动Shadow PC预热，获取STUN IPv4作为房间号
+        // 1. 先启动Shadow PC预热，获取STUN IPv6前四组作为房间号
         if (!roomId && window.shadowPcStart) {
             try {
                 addLog('[系统] 正在预检测网络信息...');
@@ -1412,15 +1530,22 @@ setTimeout(async function() {
                 while (waited < 3500) {
                     await new Promise(function(r) { setTimeout(r, 300); });
                     waited += 300;
-                    var stunIp = getLocalStunIp();
                     var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
-                    if (stunIp || shadowCands.length > 0) break;
+                    if (getLocalStunIp() || getLocalStunIPv6Prefix() || shadowCands.length > 0) break;
                 }
-                var autoStunIp = getLocalStunIp();
-                if (autoStunIp) {
-                    roomId = autoStunIp;
-                    if (roomIdInput) roomIdInput.value = autoStunIp;
-                    addLog('[系统] 自动检测到STUN IP作为房间号: ' + autoStunIp);
+                // 打印STUN信息到控制台（仅在变化时打印一次）
+                logStunInfoOnce();
+                var autoRoomId = getLocalStunIPv6Prefix() || getLocalStunIp();
+                if (autoRoomId) {
+                    roomId = autoRoomId;
+                    _roomDefaultVal = autoRoomId;
+                    if (roomIdInput) {
+                        roomIdInput.value = autoRoomId;
+                        roomIdInput.classList.add('status-ghost');
+                    }
+                    addLog('[系统] 自动检测房间号: ' + autoRoomId +
+                        ' (IPv6前四组: ' + (getLocalStunIPv6Prefix() || '无') +
+                        ', IPv4: ' + (getLocalStunIp() || '无') + ')');
                 } else {
                     addLog('[系统] 未检测到STUN IP，将按连接IP匹配');
                 }
