@@ -169,3 +169,6 @@ sequenceDiagram
 
 
 
+# 致谢
+
+**文件下载实现**： 本项目集成了 [`StreamSaver.js`](https://github.com/jimmywarting/StreamSaver.js)，用于在浏览器端处理大文件下载。它利用 Service Worker 技术实现了真正的流式写入，能够绕过浏览器内存限制，支持 GB 级别的超大文件下载而不崩溃。
