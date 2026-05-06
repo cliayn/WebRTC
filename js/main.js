@@ -964,20 +964,29 @@ function getLocalStunIp() {
     return null;
 }
 
-// 获取本机STUN服务器返回的完整IPv6（srflx候选IP）
+// 检查IPv6是否为非公网地址（link-local/ULA/多播/环回）
+function _isNonPublicIPv6(ip) {
+    return /^fe[89ab]/i.test(ip) || /^f[cd]/i.test(ip) || /^ff/i.test(ip) || ip === '::1';
+}
+
+// 获取本机公网IPv6（host + srflx，IPv6无NAT故host也是公网）
 function getLocalStunIPv6() {
     var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
     for (var i = 0; i < shadowCands.length; i++) {
-        if (shadowCands[i].type === 'srflx' && shadowCands[i].ip && shadowCands[i].ip.includes(':')) {
-            return shadowCands[i].ip;
+        var c = shadowCands[i];
+        if ((c.type === 'srflx' || c.type === 'host') && c.ip && c.ip.includes(':') && !_isNonPublicIPv6(c.ip)) {
+            return c.ip;
         }
     }
     for (var j = 0; j < localCandidates.length; j++) {
         var parts = localCandidates[j].candidate.split(' ');
         var typIdx = parts.indexOf('typ');
-        if (typIdx > 0 && parts[typIdx + 1] === 'srflx') {
-            var ip = parts[typIdx - 2];
-            if (ip && ip.includes(':')) return ip;
+        if (typIdx > 0) {
+            var type = parts[typIdx + 1];
+            if (type === 'srflx' || type === 'host') {
+                var ip = parts[typIdx - 2];
+                if (ip && ip.includes(':') && !_isNonPublicIPv6(ip)) return ip;
+            }
         }
     }
     return null;
@@ -996,23 +1005,27 @@ function expandIPv6(ip) {
     return ip;
 }
 
-// 获取本机STUN服务器返回的IPv6前四组（srflx候选IP），例如 240e:1234:5678:abcd
+// 获取本机公网IPv6前四组（host + srflx），例如 2408:8352:230:24ca
 function getLocalStunIPv6Prefix() {
     var shadowCands = window.getShadowCandidates ? window.getShadowCandidates() : [];
     for (var i = 0; i < shadowCands.length; i++) {
-        if (shadowCands[i].type === 'srflx' && shadowCands[i].ip && shadowCands[i].ip.includes(':')) {
-            var groups = expandIPv6(shadowCands[i].ip).split(':');
+        var c = shadowCands[i];
+        if ((c.type === 'srflx' || c.type === 'host') && c.ip && c.ip.includes(':') && !_isNonPublicIPv6(c.ip)) {
+            var groups = expandIPv6(c.ip).split(':');
             if (groups.length >= 4) return groups.slice(0, 4).join(':');
         }
     }
     for (var j = 0; j < localCandidates.length; j++) {
         var parts = localCandidates[j].candidate.split(' ');
         var typIdx = parts.indexOf('typ');
-        if (typIdx > 0 && parts[typIdx + 1] === 'srflx') {
-            var ip = parts[typIdx - 2];
-            if (ip && ip.includes(':')) {
-                var groups = expandIPv6(ip).split(':');
-                if (groups.length >= 4) return groups.slice(0, 4).join(':');
+        if (typIdx > 0) {
+            var type = parts[typIdx + 1];
+            if (type === 'srflx' || type === 'host') {
+                var ip = parts[typIdx - 2];
+                if (ip && ip.includes(':') && !_isNonPublicIPv6(ip)) {
+                    var groups = expandIPv6(ip).split(':');
+                    if (groups.length >= 4) return groups.slice(0, 4).join(':');
+                }
             }
         }
     }
@@ -1077,19 +1090,23 @@ function _startFastStunProbe() {
         var typIdx = parts.indexOf('typ');
         if (typIdx < 0) return;
         var type = parts[typIdx + 1];
-        if (type !== 'srflx') return;
 
         var ip = parts[typIdx - 2];
         var port = parseInt(parts[typIdx - 1], 10);
         if (port < 1024) return;
 
         if (ip.includes(':')) {
-            var groups = expandIPv6(ip).split(':');
-            if (groups.length >= 4) {
-                _fastStunIPv6Prefix = groups.slice(0, 4).join(':');
+            // IPv6: host类型就是公网地址（无NAT），srflx也是公网
+            if ((type === 'host' || type === 'srflx') && !_isNonPublicIPv6(ip)) {
+                var groups = expandIPv6(ip).split(':');
+                if (groups.length >= 4) {
+                    _fastStunIPv6Prefix = groups.slice(0, 4).join(':');
+                }
             }
         } else {
-            if (!ip.match(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|0\.)/)) {
+            // IPv4: 只取srflx（公网地址），host必定是内网地址
+            if (type === 'srflx' &&
+                !ip.match(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|0\.)/)) {
                 _fastStunIPv4 = ip;
             }
         }
@@ -1099,7 +1116,8 @@ function _startFastStunProbe() {
     setTimeout(function() {
         if (!_fastStunDone) {
             _fastStunDone = true;
-            addLog('[快速探测] STUN超时');
+            addLog('[快速探测] STUN超时 IPv4=' + (_fastStunIPv4 || '无') + ' IPv6前缀=' + (_fastStunIPv6Prefix || '无'));
+            _applyFastStunRoomId();
             try { probePc.close(); } catch(e) {}
         }
     }, 8000);
