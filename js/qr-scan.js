@@ -274,6 +274,10 @@ function scanLoop() {
             video.style.display = 'none';
             document.getElementById('scanResult').textContent = '✅ 扫描成功';
             handleScannedCompressed(code.data);
+            // 自动关闭扫码覆盖层，优化用户体验
+            setTimeout(function() {
+                scanSection.style.display = 'none';
+            }, 1000);
             return;
         }
     }

@@ -34,19 +34,62 @@ function createDataChannel() {
     dc.onclose = function () { addLog('[数据通道] 关闭'); };
 }
 
+// ========== DC就绪握手（双方DC都open后才打开聊天UI） ==========
+function _announceDcReady(peerId) {
+    var conn = connections[peerId];
+    if (!conn) return;
+    conn._localDcReady = true;
+    // 发送chat-ready通知对方
+    if (conn.dc && conn.dc.readyState === 'open') {
+        conn.dc.send(JSON.stringify({ type: 'chat-ready' }));
+        addLog('[聊天就绪] 本地DC已就绪，已通知 ' + peerId);
+    }
+    _tryOpenChat(peerId);
+}
+
+function _onChatReady(peerId) {
+    var conn = connections[peerId];
+    if (!conn) return;
+    conn._remoteDcReady = true;
+    addLog('[聊天就绪] 对方 ' + peerId + ' DC已就绪');
+    _tryOpenChat(peerId);
+}
+
+function _tryOpenChat(peerId) {
+    var conn = connections[peerId];
+    if (!conn) return;
+    if (conn._localDcReady && conn._remoteDcReady) {
+        // 双方DC都已就绪，打开聊天界面
+        if (window._openPeerChat) {
+            window._openPeerChat(peerId);
+        }
+    }
+}
+
 // ========== 为主数据通道设置消息处理器 ==========
 function setupDataChannelForPeer(peerId, channel) {
+    // 防止重复设置（channel._setupDone标记）
+    if (channel._setupDone) return;
+    channel._setupDone = true;
+
     channel.binaryType = 'arraybuffer';
 
     channel.onopen = function () {
         addLog('[数据通道] ' + peerId + ' 已打开');
         addPeerMessage(peerId, 'system', '数据通道已建立');
+        _announceDcReady(peerId);
     };
 
     channel.onclose = function () {
         addLog('[数据通道] ' + peerId + ' 关闭');
         _abortTransfer(peerId);
     };
+
+    // 如果通道已经打开，立即宣布就绪
+    if (channel.readyState === 'open') {
+        addLog('[数据通道] ' + peerId + ' 已处于打开状态');
+        _announceDcReady(peerId);
+    }
 
     channel.onmessage = function (e) {
         if (typeof e.data !== 'string') return;
@@ -69,6 +112,8 @@ function setupDataChannelForPeer(peerId, channel) {
             _abortTransfer(peerId);
         } else if (msg.type === 'chat') {
             addPeerMessage(peerId, 'peer', msg.text);
+        } else if (msg.type === 'chat-ready') {
+            _onChatReady(peerId);
         } else if (msg.type === 'disconnect') {
             addLog('[同步断开] ' + peerId + ' 已断开连接');
             addPeerMessage(peerId, 'system', '对方已断开连接');
