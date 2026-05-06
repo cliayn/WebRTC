@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP 快速探测工具 (Full IP)</title>
+    <style>
+        :root { --primary: #2563eb; --bg: #f8fafc; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: #1e293b; display: flex; justify-content: center; padding: 20px; }
+        .card { background: white; padding: 2rem; border-radius: 1rem; shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        h2 { margin-top: 0; color: #0f172a; border-bottom: 2px solid var(--primary); padding-bottom: 10px; }
+        .res-item { margin: 1.5rem 0; padding: 1rem; background: #f1f5f9; border-radius: 0.5rem; position: relative; }
+        .label { font-size: 0.875rem; color: #64748b; font-weight: 600; text-transform: uppercase; }
+        .value { font-family: monospace; font-size: 1.1rem; color: var(--primary); margin-top: 5px; word-break: break-all; min-height: 1.5rem; }
+        button { width: 100%; background: var(--primary); color: white; border: none; padding: 12px; border-radius: 0.5rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        .loading { color: #94a3b8; font-style: italic; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>🌐 IP 快速探测</h2>
+    
+    <div class="res-item">
+        <div class="label">公网 IPv4 地址</div>
+        <div id="v4-val" class="value loading">等待探测...</div>
+    </div>
+
+    <div class="res-item">
+        <div class="label">公网 IPv6 地址</div>
+        <div id="v6-val" class="value loading">等待探测...</div>
+    </div>
+
+    <button onclick="startProbe()">立即刷新探测</button>
+    <p style="font-size: 12px; color: #94a3b8; margin-top: 1rem;">注：若未显示 IPv6，可能是网络环境不支持或浏览器限制了 mDNS 暴露。</p>
+</div>
+
+<script>
+    async function startProbe() {
+        const v4El = document.getElementById('v4-val');
+        const v6El = document.getElementById('v6-val');
+        v4El.innerText = v6El.innerText = "探测中...";
+        v4El.className = v6El.className = "value loading";
+
+        const pc = new RTCPeerConnection({
+            iceServers: [
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        });
+
+        pc.createDataChannel(""); 
+        pc.createOffer().then(offer => pc.setLocalDescription(offer));
+
+        pc.onicecandidate = (ice) => {
+            if (!ice.candidate) return;
+            
+            const candidate = ice.candidate.candidate;
+            
+            // 匹配 IPv4
+            const v4Match = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(candidate);
+            
+            // 匹配 IPv6 (支持标准格式和压缩格式)
+            const v6Match = /([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){5,7}|([0-9a-fA-F]{1,4}:){1,7}:|:((:[0-9a-fA-F]{1,4}){1,7}))/.exec(candidate);
+
+            // 过滤掉内网 IPv4
+            if (v4Match && !candidate.includes("192.168.") && !candidate.includes("10.") && !candidate.includes("172.")) {
+                v4El.innerText = v4Match[1];
+                v4El.className = "value";
+            }
+
+            // 输出完整 IPv6
+            if (v6Match) {
+                // 直接取匹配到的第一个分组，不再进行切片
+                v6El.innerText = v6Match[1];
+                v6El.className = "value";
+            }
+        };
+
+        // 5秒后停止探测
+        setTimeout(() => pc.close(), 5000);
+    }
+
+    // 页面加载自动执行
+    window.onload = startProbe;
+</script>
+
+</body>
+</html>
