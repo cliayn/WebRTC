@@ -39,8 +39,9 @@ serverUrlInput.value = serverUrl;
 stunServerInput.value = stunServer;
 burstRangeInput.value = gatewayBurstRange;
 
-// ====== 立即启动快速STUN探测（独立轻量PC，1-2秒获得结果） ======
+// ====== 立即启动快速STUN探测 + HTTP API探测（并行） ======
 _startFastStunProbe();
+_startHttpProbe();
 
 // ====== 多连接管理 ======
 
@@ -493,9 +494,10 @@ async function startWebRTCAsInitiator(peerId) {
         }
     }
 
-    // 2. 再加入已收集到的真实候选（去重）
+    // 2. 再加入已收集到的真实候选（去重，过滤TCP/低端口）
     for (var li = 0; li < localCandidates.length; li++) {
         var lc = localCandidates[li];
+        if (lc.candidate.includes('tcptype')) continue;
         var lcParts = lc.candidate.split(' ');
         var lcTypIdx = lcParts.indexOf('typ');
         if (lcTypIdx > 1) {
@@ -681,14 +683,22 @@ function createPeerConnection() {
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
-            localCandidates.push(e.candidate);
-            addLog(`[本地ICE] ${e.candidate.candidate}`);
-            // 过滤低端口候选（端口 < 1024 为系统保留端口），不发送给对端
+            var candStr = e.candidate.candidate;
+            addLog(`[本地ICE] ${candStr}`);
+            var _cparts = candStr.split(' ');
+            var _cport = _cparts.length >= 6 ? parseInt(_cparts[5], 10) : 0;
+            var _isTcp = candStr.includes('tcptype');
+
+            // 过滤低端口(<1024)和TCP候选，不添加到localCandidates（加速QR压缩）
+            if (_cport >= 1024 && !_isTcp) {
+                localCandidates.push(e.candidate);
+            } else {
+                addLog(`[本地ICE] 跳过${_isTcp ? 'TCP' : '低端口' + _cport}候选`);
+            }
+
+            // 发送给对端时同样过滤
             if (ws && ws.readyState === WebSocket.OPEN && targetId) {
-                var _cparts = e.candidate.candidate.split(' ');
-                var _cport = _cparts.length >= 6 ? parseInt(_cparts[5], 10) : 0;
-                if (_cport >= 1024) {
-                    // 检查是否已在Offer/Answer SDP中嵌入过
+                if (_cport >= 1024 && !_isTcp) {
                     var _cip = _cparts.length >= 5 ? _cparts[4] : '';
                     var _ckey = _cip + ':' + _cport;
                     if (_embeddedIceSet && _embeddedIceSet[_ckey]) {
@@ -698,10 +708,8 @@ function createPeerConnection() {
                     ws.send(JSON.stringify({
                         type: 'ice',
                         target: targetId,
-                        payload: e.candidate.candidate
+                        payload: candStr
                     }));
-                } else {
-                    addLog(`[本地ICE] 跳过低端口候选(端口${_cport})`);
                 }
             }
         } else {
@@ -859,9 +867,10 @@ async function handleRemoteOfferCompressed(compressed, fromId) {
         }
     }
 
-    // 2. 已收集的真实候选
+    // 2. 已收集的真实候选（过滤TCP/低端口）
     for (var lai = 0; lai < localCandidates.length; lai++) {
         var alc = localCandidates[lai];
+        if (alc.candidate.includes('tcptype')) continue;
         var aParts = alc.candidate.split(' ');
         var aTypIdx = aParts.indexOf('typ');
         if (aTypIdx > 1) {
@@ -1121,6 +1130,88 @@ function _startFastStunProbe() {
             try { probePc.close(); } catch(e) {}
         }
     }, 8000);
+}
+
+// HTTP API 探测：并行请求IPv6/IPv4检测接口（参考ip.html v2.0）
+// 比WebRTC STUN更可靠，尤其对IPv6的检测
+var _httpProbeDone = false;
+function _startHttpProbe() {
+    if (_httpProbeDone) return;
+    _httpProbeDone = true;
+
+    var pending = 0;
+    var totalApis = 0;
+
+    function tryDone() {
+        pending--;
+        if (pending <= 0) {
+            addLog('[HTTP探测] 完成 IPv4=' + (_fastStunIPv4 || '无') + ' IPv6前缀=' + (_fastStunIPv6Prefix || '无'));
+            _applyFastStunRoomId();
+        }
+    }
+
+    function fetchIp(url, isV6) {
+        pending++;
+        totalApis++;
+        fetch(url, { method: 'GET', mode: 'cors' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.text();
+            })
+            .then(function(text) {
+                var ip = text.trim();
+                if (!ip) { tryDone(); return; }
+
+                if (ip.includes(':')) {
+                    // IPv6
+                    if (!_isNonPublicIPv6(ip)) {
+                        var groups = expandIPv6(ip).split(':');
+                        if (groups.length >= 4 && !_fastStunIPv6Prefix) {
+                            _fastStunIPv6Prefix = groups.slice(0, 4).join(':');
+                            addLog('[HTTP探测] IPv6前缀: ' + _fastStunIPv6Prefix + ' (来自 ' + url + ')');
+                        }
+                    }
+                } else if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                    // IPv4
+                    if (!ip.match(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|0\.)/) && !_fastStunIPv4) {
+                        _fastStunIPv4 = ip;
+                        addLog('[HTTP探测] IPv4: ' + ip + ' (来自 ' + url + ')');
+                    }
+                }
+                tryDone();
+            })
+            .catch(function() {
+                tryDone();
+            });
+    }
+
+    // 优先IPv6 API
+    if (typeof httpIPv6Apis !== 'undefined' && httpIPv6Apis.length) {
+        for (var i = 0; i < httpIPv6Apis.length; i++) {
+            fetchIp(httpIPv6Apis[i], true);
+        }
+    }
+    // 双栈API（优先IPv6）
+    if (typeof httpDualApis !== 'undefined' && httpDualApis.length) {
+        for (var j = 0; j < httpDualApis.length; j++) {
+            fetchIp(httpDualApis[j], true);
+        }
+    }
+    // IPv4 API
+    if (typeof httpIPv4Apis !== 'undefined' && httpIPv4Apis.length) {
+        for (var k = 0; k < httpIPv4Apis.length; k++) {
+            fetchIp(httpIPv4Apis[k], false);
+        }
+    }
+
+    // 5秒总超时
+    setTimeout(function() {
+        if (pending > 0) {
+            pending = 0;
+            addLog('[HTTP探测] 超时');
+            _applyFastStunRoomId();
+        }
+    }, 5000);
 }
 
 // 将快速探测结果应用到房间号输入框

@@ -1,16 +1,3 @@
----
-title: WebRTC的学习
-date: 2026-04-14 23:20:24
-tags:
-    - web-net
-    - js
-    - p2p
-categories: Data Transmission
-top: 100
-reward: true
-
----
-
 # 0-学习`webrtc`
 
 [内网直传 · 专业修复版(点击体验)](https://cliayn.github.io/WebRTC/)

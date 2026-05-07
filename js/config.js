@@ -29,6 +29,19 @@ var serverUrl = "my-party.cliayn.partykit.dev/party/default";      // 信令服�
 var stunServer = "stun:stun.l.google.com:19302"; // STUN服务器地址
 var serverConnected = false;                // 信令连接状态
 
+// ========== HTTP IP探测 API（可自行增删改） ==========
+var httpIPv6Apis = [                        // 纯IPv6检测
+    'https://api-ipv6.ip.sb/ip',
+    'https://ipv6.icanhazip.com'
+];
+var httpIPv4Apis = [                        // 纯IPv4检测
+    'https://api-ipv4.ip.sb/ip',
+    'https://ipv4.icanhazip.com'
+];
+var httpDualApis = [                        // 优先IPv6，无IPv6则返回IPv4
+    'https://ip.sb/ip'
+];
+
 // ========== 网络探查状态 ==========
 var peerNodes = [];         // 发现的设备节点列表
 var roomId = '';            // 当前房间号（用于雷达匹配，空字符串表示无房间号）

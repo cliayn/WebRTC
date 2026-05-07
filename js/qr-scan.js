@@ -63,11 +63,13 @@ function generateCompressedQR() {
         }
     }
 
-    // 2. 已收集的真实候选
+    // 2. 已收集的真实候选（过滤TCP和低端口，加速QR压缩）
     for (var ci = 0; ci < localCandidates.length; ci++) {
-        const parts = localCandidates[ci].candidate.split(' ');
+        const candStr = localCandidates[ci].candidate;
+        const parts = candStr.split(' ');
         const typIdx = parts.indexOf('typ');
-        if (typIdx > 1 && parseInt(parts[typIdx - 1], 10) >= 1024) {
+        // 跳过TCP候选（包含tcptype）和低端口候选
+        if (typIdx > 1 && parseInt(parts[typIdx - 1], 10) >= 1024 && !candStr.includes('tcptype')) {
             var lcIp = parts[typIdx - 2];
             var lcPort = parseInt(parts[typIdx - 1], 10);
             var lcType = parts[typIdx + 1];
