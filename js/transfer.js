@@ -26,6 +26,32 @@ var TF_CHANNEL_IDS = [1000, 1001, 1002, 1003];
 // ========== 传输状态 ==========
 var _tf = {};  // peerId -> TransferSession
 
+// ========== 文件选择通知 & 消息缓冲 ==========
+var _peerSelectingFile = {};  // peerId -> true  (对方正在选择文件)
+var _msgBuffer = {};          // peerId -> [ { type, text, seq, ts } ]  (缓冲的消息)
+var _cameraStream = null;     // 拍照用摄像头流
+var _dragActivePeerId = null; // 当前拖放目标 peerId
+
+// ========== 消息排序 ==========
+var _chatSeq = {};            // peerId -> int (本地发送序列号)
+var _peerLastSeq = {};        // peerId -> int (对方最后收到的序列号)
+var _localDeviceType = null;  // 本机设备类型: 'android' | 'ios' | 'desktop'
+
+// ========== 设备检测 ==========
+function _detectDeviceType() {
+    if (_localDeviceType) return _localDeviceType;
+    var ua = navigator.userAgent;
+    if (/Android/i.test(ua)) {
+        _localDeviceType = 'android';
+    } else if (/iPhone|iPad|iPod/i.test(ua)) {
+        _localDeviceType = 'ios';
+    } else {
+        _localDeviceType = 'desktop';
+    }
+    addLog('[设备检测] 本机类型: ' + _localDeviceType);
+    return _localDeviceType;
+}
+
 // ========== 创建主数据通道 ==========
 function createDataChannel() {
     dc = pc.createDataChannel('fileTransfer');
@@ -39,18 +65,22 @@ function _announceDcReady(peerId) {
     var conn = connections[peerId];
     if (!conn) return;
     conn._localDcReady = true;
-    // 发送chat-ready通知对方
+    // 发送chat-ready通知对方（附带设备类型，用于消息缓冲决策）
     if (conn.dc && conn.dc.readyState === 'open') {
-        conn.dc.send(JSON.stringify({ type: 'chat-ready' }));
+        conn.dc.send(JSON.stringify({ type: 'chat-ready', device: _detectDeviceType() }));
         addLog('[聊天就绪] 本地DC已就绪，已通知 ' + peerId);
     }
     _tryOpenChat(peerId);
 }
 
-function _onChatReady(peerId) {
+function _onChatReady(peerId, msg) {
     var conn = connections[peerId];
     if (!conn) return;
     conn._remoteDcReady = true;
+    if (msg && msg.device) {
+        conn._peerDeviceType = msg.device;
+        addLog('[设备检测] ' + peerId + ' 设备类型: ' + msg.device);
+    }
     addLog('[聊天就绪] 对方 ' + peerId + ' DC已就绪');
     _tryOpenChat(peerId);
 }
@@ -78,6 +108,8 @@ function setupDataChannelForPeer(peerId, channel) {
         addLog('[数据通道] ' + peerId + ' 已打开');
         addPeerMessage(peerId, 'system', '数据通道已建立');
         _announceDcReady(peerId);
+        // DC恢复后立即发送缓冲消息（灰泡变蓝）
+        _flushBufferedMsgs(peerId);
     };
 
     channel.onclose = function () {
@@ -85,10 +117,11 @@ function setupDataChannelForPeer(peerId, channel) {
         _abortTransfer(peerId);
     };
 
-    // 如果通道已经打开，立即宣布就绪
+    // 如果通道已经打开，立即宣布就绪并刷新缓冲消息
     if (channel.readyState === 'open') {
         addLog('[数据通道] ' + peerId + ' 已处于打开状态');
         _announceDcReady(peerId);
+        _flushBufferedMsgs(peerId);
     }
 
     channel.onmessage = function (e) {
@@ -111,9 +144,18 @@ function setupDataChannelForPeer(peerId, channel) {
             addPeerMessage(peerId, 'system', '对方取消了传输');
             _abortTransfer(peerId);
         } else if (msg.type === 'chat') {
-            addPeerMessage(peerId, 'peer', msg.text);
+            addPeerMessage(peerId, 'peer', msg.text, msg.ts, msg.seq);
+            // 跟踪对端最后序列号（用于乱序检测）
+            if (msg.seq !== undefined) {
+                if (!_peerLastSeq[peerId]) _peerLastSeq[peerId] = 0;
+                if (msg.seq > _peerLastSeq[peerId]) _peerLastSeq[peerId] = msg.seq;
+            }
         } else if (msg.type === 'chat-ready') {
-            _onChatReady(peerId);
+            _onChatReady(peerId, msg);
+        } else if (msg.type === 'file-selecting') {
+            _onPeerFileSelecting(peerId, msg);
+        } else if (msg.type === 'messages-flush') {
+            _onMessagesFlush(peerId, msg);
         } else if (msg.type === 'disconnect') {
             addLog('[同步断开] ' + peerId + ' 已断开连接');
             addPeerMessage(peerId, 'system', '对方已断开连接');
@@ -122,6 +164,266 @@ function setupDataChannelForPeer(peerId, channel) {
             }, 100);
         }
     };
+}
+
+// ========== 文件选择通知处理 ==========
+function _onPeerFileSelecting(peerId, msg) {
+    var peerDevice = connections[peerId] && connections[peerId]._peerDeviceType;
+
+    if (msg.action === 'start') {
+        // 桌面和iOS不会断连，无需任何提示和缓冲
+        if (peerDevice !== 'android') {
+            addLog('[文件选择] ' + peerId + ' (' + (peerDevice || '未知') + ') 无需缓冲');
+            return;
+        }
+        // Android：设置缓冲标志，仅弹toast提示
+        _peerSelectingFile[peerId] = true;
+        addLog('[文件选择] ' + peerId + ' (Android) 正在选择文件');
+        _showToast('对方在选择文件，消息将缓存延迟发送', 2500);
+        // 超时保护：30秒后自动清除（防止'end'通知丢失）
+        var _pid = peerId;
+        setTimeout(function () {
+            if (_peerSelectingFile[_pid]) {
+                _peerSelectingFile[_pid] = false;
+                addLog('[文件选择] 超时自动清除选择状态 for ' + _pid);
+                _flushBufferedMsgs(_pid);
+            }
+        }, 30000);
+    } else if (msg.action === 'end') {
+        _peerSelectingFile[peerId] = false;
+        addLog('[文件选择] ' + peerId + ' 文件选择完成');
+        _flushBufferedMsgs(peerId);
+    }
+}
+
+function _onMessagesFlush(peerId, msg) {
+    if (msg.messages && msg.messages.length > 0) {
+        addLog('[消息刷新] 收到 ' + msg.messages.length + ' 条缓冲消息');
+        for (var i = 0; i < msg.messages.length; i++) {
+            if (msg.messages[i].type === 'chat') {
+                // 使用原始时间戳和序列号，排序插入到正确位置
+                addPeerMessage(peerId, 'peer', msg.messages[i].text, msg.messages[i].ts, msg.messages[i].seq);
+            }
+        }
+    }
+}
+
+// 发送缓冲的消息给对端，并恢复灰色气泡为正常颜色
+function _flushBufferedMsgs(peerId) {
+    var conn = connections[peerId];
+    if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+        addLog('[消息刷新] 数据通道未就绪，无法发送缓冲消息');
+        return;
+    }
+    var buf = _msgBuffer[peerId];
+    if (!buf || buf.length === 0) return;
+    addLog('[消息刷新] 发送 ' + buf.length + ' 条缓冲消息到 ' + peerId);
+
+    // 将缓冲消息按顺序发送
+    conn.dc.send(JSON.stringify({
+        type: 'messages-flush',
+        messages: buf.map(function (m) { return { type: m.type, text: m.text, seq: m.seq, ts: m.ts }; })
+    }));
+
+    // 恢复灰色气泡为正常蓝色
+    for (var i = 0; i < buf.length; i++) {
+        if (buf[i].el) {
+            buf[i].el.classList.remove('buffered-msg');
+        }
+    }
+    _msgBuffer[peerId] = [];
+}
+
+// 通知对方：我正在选择文件 / 已完成选择
+function _announceFileSelecting(peerId, action) {
+    var conn = connections[peerId];
+    if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+        addLog('[文件选择] 数据通道未就绪，无法通知对方');
+        return;
+    }
+    conn.dc.send(JSON.stringify({ type: 'file-selecting', action: action }));
+    addLog('[文件选择] 通知 ' + peerId + ': ' + action);
+}
+
+// ========== Toast 提示 ==========
+var _toastTimer = null;
+function _showToast(text, durationMs) {
+    var container = document.getElementById('toastContainer');
+    var message = document.getElementById('toastMessage');
+    if (!container || !message) return;
+    if (_toastTimer) clearTimeout(_toastTimer);
+
+    message.textContent = text;
+    container.classList.remove('hidden');
+    // 重置动画
+    container.style.animation = 'none';
+    container.offsetHeight; // reflow
+    container.style.animation = 'toastSlideIn 0.3s ease, toastSlideOut 0.3s ease ' + ((durationMs - 300) / 1000).toFixed(1) + 's forwards';
+
+    _toastTimer = setTimeout(function () {
+        container.classList.add('hidden');
+        _toastTimer = null;
+    }, durationMs);
+}
+
+// ========== 拍照功能 ==========
+function _openCamera(peerId) {
+    var overlay = document.getElementById('cameraOverlay');
+    var video = document.getElementById('cameraVideo');
+    if (!overlay || !video) return;
+
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('data-peerid', peerId);
+
+    var constraints = {
+        video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+        },
+        audio: false
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
+        .then(function (stream) {
+            _cameraStream = stream;
+            video.srcObject = stream;
+            video.play();
+            addLog('[拍照] 摄像头已启动');
+        })
+        .catch(function (err) {
+            addLog('[拍照] 摄像头启动失败: ' + err.message);
+            _closeCamera();
+            _showToast('无法访问摄像头', 2000);
+        });
+}
+
+function _closeCamera() {
+    if (_cameraStream) {
+        _cameraStream.getTracks().forEach(function (t) { t.stop(); });
+        _cameraStream = null;
+    }
+    var overlay = document.getElementById('cameraOverlay');
+    if (overlay) overlay.classList.add('hidden');
+    var video = document.getElementById('cameraVideo');
+    if (video) video.srcObject = null;
+}
+
+function _capturePhoto() {
+    var overlay = document.getElementById('cameraOverlay');
+    var peerId = overlay ? overlay.getAttribute('data-peerid') : null;
+    var video = document.getElementById('cameraVideo');
+    var canvas = document.getElementById('cameraCanvas');
+    if (!video || !canvas || !peerId) return;
+
+    var vw = video.videoWidth;
+    var vh = video.videoHeight;
+    if (vw === 0 || vh === 0) {
+        _showToast('摄像头未就绪', 1500);
+        return;
+    }
+
+    canvas.width = vw;
+    canvas.height = vh;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, vw, vh);
+
+    canvas.toBlob(function (blob) {
+        if (!blob) {
+            addLog('[拍照] 截图失败');
+            return;
+        }
+        var timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        var file = new File([blob], 'photo_' + timestamp + '.jpg', { type: 'image/jpeg' });
+
+        var conn = connections[peerId];
+        if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+            addLog('[拍照] 数据通道未就绪，无法发送');
+            _showToast('连接未就绪，发送失败', 2000);
+            return;
+        }
+        sendFileOverDC(conn.dc, file, peerId);
+        addPeerMessage(peerId, 'system', '已发送照片: ' + file.name);
+        _closeCamera();
+    }, 'image/jpeg', 0.85);
+}
+
+// ========== 拖放上传 ==========
+var _dragCounter = 0; // 全局拖放层级计数器
+
+function _setupDragDrop(container, peerId) {
+    if (!container) return;
+
+    // 容器级 dragover/dragenter：直接显示覆盖层
+    container.addEventListener('dragenter', function (e) {
+        e.preventDefault();
+        if (_tf[peerId]) return;
+        _dragActivePeerId = peerId;
+        var overlay = document.getElementById('dragOverlay');
+        if (overlay) overlay.classList.remove('hidden');
+    });
+
+    container.addEventListener('dragover', function (e) {
+        e.preventDefault();
+    });
+}
+
+// 全局拖放事件（只绑定一次）
+var _globalDragWired = false;
+function _wireGlobalDragDrop() {
+    if (_globalDragWired) return;
+    _globalDragWired = true;
+
+    var dragOverlay = document.getElementById('dragOverlay');
+
+    document.addEventListener('dragenter', function (e) {
+        e.preventDefault();
+        _dragCounter++;
+        // 有活跃的聊天窗口才显示拖放覆盖层
+        if (_dragActivePeerId && dragOverlay) {
+            dragOverlay.classList.remove('hidden');
+        }
+    });
+
+    document.addEventListener('dragover', function (e) {
+        e.preventDefault();
+    });
+
+    document.addEventListener('dragleave', function (e) {
+        e.preventDefault();
+        _dragCounter--;
+        if (_dragCounter <= 0) {
+            _dragCounter = 0;
+            if (dragOverlay) dragOverlay.classList.add('hidden');
+        }
+    });
+
+    document.addEventListener('drop', function (e) {
+        e.preventDefault();
+        _dragCounter = 0;
+        if (dragOverlay) dragOverlay.classList.add('hidden');
+
+        var files = e.dataTransfer.files;
+        var peerId = _dragActivePeerId;
+        // 验证目标对等端聊天窗口仍处于激活状态
+        if (peerId) {
+            var activeContainer = document.querySelector('#peerTabs .peer-chat-container.active[data-peerid="' + peerId + '"]');
+            if (!activeContainer) peerId = null;
+        }
+        if (!files || files.length === 0 || !peerId) return;
+
+        var conn = connections[peerId];
+        if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+            addLog('[拖放] 数据通道未就绪，无法发送');
+            _showToast('连接未就绪，请稍后重试', 2000);
+            return;
+        }
+
+        for (var i = 0; i < files.length; i++) {
+            sendFileOverDC(conn.dc, files[i], peerId);
+        }
+        addLog('[拖放] 已发送 ' + files.length + ' 个文件');
+    });
 }
 
 // ========== 对外入口：发送文件 ==========
@@ -1051,29 +1353,88 @@ function createPeerChatContainer(peerId) {
     var sendBtn  = container.querySelector('.send-msg-btn');
     var fileInput  = container.querySelector('.file-input');
     var fileLabel  = container.querySelector('.file-label-btn');
+    var cameraBtn  = container.querySelector('.camera-btn');
+    var cameraInput = container.querySelector('.camera-input');
 
+    // 发送消息（DC未断开直接发；DC断开+Android选择中→灰泡缓存→重连后自动发送并变蓝）
     sendBtn.onclick = function () {
         var text = msgInput.value.trim();
         if (!text) return;
         var conn = connections[peerId];
-        if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+        if (!conn || !conn.dc) {
             addLog('[发送失败] 数据通道未就绪');
             return;
         }
-        conn.dc.send(JSON.stringify({ type: 'chat', text: text }));
-        addPeerMessage(peerId, 'self', text);
+
+        // 分配本地序列号和时间戳
+        if (!_chatSeq[peerId]) _chatSeq[peerId] = 0;
+        _chatSeq[peerId]++;
+        var seq = _chatSeq[peerId];
+        var ts = Date.now();
+
+        // 只要DC还开着，直接发送（不管对方是否在选择文件）
+        if (conn.dc.readyState === 'open') {
+            conn.dc.send(JSON.stringify({ type: 'chat', text: text, seq: seq, ts: ts }));
+            addPeerMessage(peerId, 'self', text, ts, seq);
+            msgInput.value = '';
+            return;
+        }
+
+        // DC已断开 → 需要缓冲
+        if (!_msgBuffer[peerId]) _msgBuffer[peerId] = [];
+        // 灰色气泡（sendAndTrack会返回DOM引用用于后续恢复颜色）
+        var el = addPeerMessage(peerId, 'self', text, ts, seq, true);
+        _msgBuffer[peerId].push({ type: 'chat', text: text, seq: seq, ts: ts, el: el });
+        addLog('[消息缓冲] DC断开，消息已缓存 #' + seq);
         msgInput.value = '';
+
+        // 仅当是Android选择文件导致的断开才提示
+        if (_peerSelectingFile[peerId]) {
+            _showToast('对方在选择文件，消息将缓存延迟发送', 2500);
+        }
     };
     msgInput.onkeypress = function (e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.onclick(); }
     };
 
+    // 文件选择：先通知对方，再打开文件对话框
+    fileLabel.onmousedown = function () {
+        _announceFileSelecting(peerId, 'start');
+    };
+    fileLabel.ontouchstart = function () {
+        _announceFileSelecting(peerId, 'start');
+    };
     fileLabel.onclick = function () { fileInput.click(); };
     fileInput.onchange = function () {
+        // 文件选择完成，通知对方
+        _announceFileSelecting(peerId, 'end');
+
         if (fileInput.files.length) {
             var conn = connections[peerId];
             if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
-                addLog('[发送失败] 数据通道未就绪');
+                // DC已断开（如Android切后台导致），尝试ICE重启
+                addLog('[发送] 数据通道未就绪，尝试ICE重启...');
+                if (window.iceRestart) {
+                    window.iceRestart(peerId).then(function (ok) {
+                        if (ok) {
+                            addLog('[ICE重启] 成功，继续发送文件');
+                            var c2 = connections[peerId];
+                            if (c2 && c2.dc && c2.dc.readyState === 'open') {
+                                sendFileOverDC(c2.dc, fileInput.files[0], peerId);
+                            } else {
+                                addLog('[发送失败] ICE重启后DC仍未就绪');
+                                _showToast('连接已断开，发送失败，请重试', 2500);
+                            }
+                        } else {
+                            addLog('[ICE重启] 失败');
+                            _showToast('连接断开，发送失败，请重试', 2500);
+                        }
+                        fileInput.value = '';
+                    });
+                    return;
+                }
+                addLog('[发送失败] 数据通道未就绪且ICE重启不可用');
+                _showToast('连接未就绪，发送失败', 2000);
                 fileInput.value = '';
                 return;
             }
@@ -1082,43 +1443,167 @@ function createPeerChatContainer(peerId) {
         }
     };
 
+    // 拍照按钮
+    if (cameraBtn) {
+        cameraBtn.onmousedown = function () {
+            _announceFileSelecting(peerId, 'start');
+        };
+        cameraBtn.ontouchstart = function () {
+            _announceFileSelecting(peerId, 'start');
+        };
+        cameraBtn.onclick = function () {
+            // Android: 优先使用系统相机（capture属性），避免页面切后台断连
+            // 桌面端: 使用页面内全屏拍照
+            var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            if (isMobile && cameraInput) {
+                cameraInput.click();
+            } else {
+                _openCamera(peerId);
+            }
+        };
+    }
+    if (cameraInput) {
+        cameraInput.onchange = function () {
+            _announceFileSelecting(peerId, 'end');
+            if (cameraInput.files.length) {
+                var conn = connections[peerId];
+                if (!conn || !conn.dc || conn.dc.readyState !== 'open') {
+                    if (window.iceRestart) {
+                        window.iceRestart(peerId).then(function (ok) {
+                            if (ok) {
+                                var c2 = connections[peerId];
+                                if (c2 && c2.dc && c2.dc.readyState === 'open') {
+                                    sendFileOverDC(c2.dc, cameraInput.files[0], peerId);
+                                }
+                            }
+                            cameraInput.value = '';
+                        });
+                        return;
+                    }
+                    _showToast('连接未就绪，发送失败', 2000);
+                    cameraInput.value = '';
+                    return;
+                }
+                sendFileOverDC(conn.dc, cameraInput.files[0], peerId);
+                cameraInput.value = '';
+            }
+        };
+    }
+
     tabs.appendChild(container);
+
+    // 启用拖放上传
+    _setupDragDrop(container, peerId);
 
     if (connections[peerId] && connections[peerId].messages) {
         var msgs = connections[peerId].messages;
         connections[peerId].messages = [];
         for (var m = 0; m < msgs.length; m++) {
-            addPeerMessage(peerId, msgs[m].sender, msgs[m].text);
+            addPeerMessage(peerId, msgs[m].sender, msgs[m].text, msgs[m].ts, msgs[m].seq);
         }
     }
     return container;
 }
 
-function addPeerMessage(peerId, sender, text) {
+// ts / seq 为可选排序参数，buffered 为可选灰泡标记
+// 返回 wrapper DOM 元素（用于后续恢复颜色）
+function addPeerMessage(peerId, sender, text, ts, seq, buffered) {
     var container = document.querySelector('#peerTabs .peer-chat-container[data-peerid="' + peerId + '"]');
-    if (!container) return;
+    if (!container) return null;
     var msgList = container.querySelector('.transfer-messages');
-    if (!msgList) return;
+    if (!msgList) return null;
 
     var wrapper = document.createElement('div');
-    if (sender === 'self') wrapper.className = 'message-wrapper self-msg';
-    else if (sender === 'system') wrapper.className = 'message-wrapper system-msg';
-    else wrapper.className = 'message-wrapper peer-msg';
+    if (sender === 'self') {
+        wrapper.className = 'message-wrapper self-msg';
+        if (buffered) wrapper.classList.add('buffered-msg');
+    } else if (sender === 'system') {
+        wrapper.className = 'message-wrapper system-msg';
+    } else {
+        wrapper.className = 'message-wrapper peer-msg';
+    }
+
+    // 设置排序属性（仅对用户消息）
+    if (ts !== undefined) wrapper.setAttribute('data-ts', ts);
+    if (seq !== undefined) wrapper.setAttribute('data-seq', seq);
 
     var bubble = document.createElement('div');
     bubble.className = 'message';
     bubble.textContent = text;
     wrapper.appendChild(bubble);
-    msgList.appendChild(wrapper);
+
+    // 插入策略：
+    // - 自建消息 / 系统消息 / 无ts的对方消息：直接追加
+    // - 有ts的对方消息（缓冲刷新）：按ts插入到正确位置
+    if (sender === 'peer' && ts !== undefined) {
+        var children = msgList.children;
+        var inserted = false;
+        // 从后向前查找插入点（ts更小的消息应排在前面）
+        for (var i = children.length - 1; i >= 0; i--) {
+            var childTs = children[i].getAttribute('data-ts');
+            if (childTs !== null && childTs !== undefined) {
+                var childTsNum = parseInt(childTs, 10);
+                if (ts >= childTsNum) {
+                    // 插入到该消息之后
+                    if (i + 1 < children.length) {
+                        msgList.insertBefore(wrapper, children[i + 1]);
+                    } else {
+                        msgList.appendChild(wrapper);
+                    }
+                    inserted = true;
+                    break;
+                }
+            }
+        }
+        if (!inserted) {
+            // ts比所有现有消息都小，插入到最前面
+            if (children.length > 0) {
+                msgList.insertBefore(wrapper, children[0]);
+            } else {
+                msgList.appendChild(wrapper);
+            }
+        }
+    } else {
+        msgList.appendChild(wrapper);
+    }
 
     var cc = container.querySelector('.chat-container');
     if (cc) cc.scrollTop = cc.scrollHeight;
 
+    // 存储到连接消息历史（用于重放）
     if (connections[peerId]) {
         if (!connections[peerId].messages) connections[peerId].messages = [];
-        connections[peerId].messages.push({ sender: sender, text: text });
+        connections[peerId].messages.push({ sender: sender, text: text, ts: ts, seq: seq });
     }
+
+    return wrapper;
 }
+
+// ========== 全局初始化：拍照覆盖层事件 ==========
+(function () {
+    var cameraCloseBtn = document.getElementById('cameraCloseBtn');
+    var cameraCaptureBtn = document.getElementById('cameraCaptureBtn');
+    var overlay = document.getElementById('cameraOverlay');
+
+    if (cameraCloseBtn) {
+        cameraCloseBtn.onclick = function () {
+            // 关闭拍照时通知对方结束文件选择
+            var peerId = overlay ? overlay.getAttribute('data-peerid') : null;
+            if (peerId) _announceFileSelecting(peerId, 'end');
+            _closeCamera();
+        };
+    }
+    if (cameraCaptureBtn) {
+        cameraCaptureBtn.onclick = function () {
+            var peerId = overlay ? overlay.getAttribute('data-peerid') : null;
+            _capturePhoto();
+            if (peerId) _announceFileSelecting(peerId, 'end');
+        };
+    }
+
+    // 全局拖放事件（只绑定一次）
+    _wireGlobalDragDrop();
+})();
 
 // ========== 兼容旧版 ==========
 function sendChatMessage() {
@@ -1145,3 +1630,6 @@ window.sendFile                     = sendFile;
 window.showTransferAssistant        = showTransferAssistant;
 window.addMessage                   = addMessage;
 window.tryResumeTransfer            = tryResumeTransfer;
+window._showToast                   = _showToast;
+window._closeCamera                 = _closeCamera;
+window._announceFileSelecting       = _announceFileSelecting;

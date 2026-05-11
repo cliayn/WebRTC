@@ -934,6 +934,139 @@ async function reconnectWithCarrierNatReplacement(detectedCarrierNatIp, replacem
     }
 }
 
+// ========== ICE重启（移动端文件选择后秒级重连） ==========
+async function iceRestart(peerId) {
+    var conn = connections[peerId];
+    if (!conn || !conn.pc) {
+        addLog('[ICE重启] 无有效连接');
+        return false;
+    }
+
+    var restartPc = conn.pc;
+    addLog('[ICE重启] 开始为 ' + peerId + ' 触发ICE重启');
+
+    // Step 1: 触发浏览器级别ICE重启
+    try {
+        restartPc.restartIce();
+        addLog('[ICE重启] restartIce() 已调用');
+    } catch (e) {
+        addLog('[ICE重启] restartIce() 不可用: ' + e.message);
+        // 降级：尝试通过信令重新协商
+    }
+
+    // Step 2: 等待自动恢复（最多4秒）
+    var maxWait = 4000;
+    var interval = 300;
+    var waited = 0;
+
+    return new Promise(function (resolve) {
+        var check = function () {
+            var state = restartPc.connectionState;
+            var dcState = conn.dc ? conn.dc.readyState : 'closed';
+
+            addLog('[ICE重启] 状态检查: conn=' + state + ', dc=' + dcState + ' (waited ' + waited + 'ms)');
+
+            if (state === 'connected') {
+                // 连接已恢复，检查DC是否需要重新创建
+                if (dcState !== 'open' && conn.dc) {
+                    // DC可能因ICE重启而关闭，尝试重新创建
+                    addLog('[ICE重启] 连接恢复但DC未就绪，等待DC恢复...');
+                    // DC应该由ondatachannel或浏览器自动恢复
+                }
+                if (dcState === 'open' || (conn.dc && conn.dc.readyState === 'open')) {
+                    addLog('[ICE重启] 恢复成功！');
+                    resolve(true);
+                    return;
+                }
+            }
+
+            waited += interval;
+            if (waited >= maxWait) {
+                addLog('[ICE重启] 超时，尝试通过信令重新协商...');
+                // Step 3: 尝试信令层重新协商
+                _iceRestartViaSignaling(peerId, restartPc, conn).then(resolve);
+                return;
+            }
+            setTimeout(check, interval);
+        };
+        setTimeout(check, interval);
+    });
+}
+
+async function _iceRestartViaSignaling(peerId, restartPc, conn) {
+    try {
+        // 重新连接信令
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            addLog('[ICE重启] 重新连接信令服务器...');
+            await connectSignaling();
+            // 等待OK和join_room
+            await new Promise(function (r) { setTimeout(r, 500); });
+        }
+
+        // 创建带iceRestart的Offer
+        var offer = await restartPc.createOffer({ iceRestart: true });
+        await restartPc.setLocalDescription(offer);
+        addLog('[ICE重启] 已创建ICE重启Offer');
+
+        // 压缩SDP并发送
+        var ufrag = null, pwd = null;
+        var sdpLines = offer.sdp.split('\n');
+        for (var i = 0; i < sdpLines.length; i++) {
+            if (sdpLines[i].indexOf('a=ice-ufrag:') === 0) {
+                ufrag = sdpLines[i].substring(12).trim();
+            } else if (sdpLines[i].indexOf('a=ice-pwd:') === 0) {
+                pwd = sdpLines[i].substring(11).trim();
+            }
+        }
+        var fingerprint = '';
+        var fpMatch = offer.sdp.match(/a=fingerprint:sha-256\s+(\S+)/);
+        if (fpMatch) fingerprint = fpMatch[1];
+
+        var compressed = {
+            u: ufrag, p: pwd, f: fingerprint,
+            ice: [],
+            stunIp: localStunIp || ''
+        };
+
+        // 发送ICE重启Offer
+        if (ws && ws.readyState === WebSocket.OPEN && peerId) {
+            ws.send(JSON.stringify({
+                type: 'offer',
+                target: peerId,
+                payload: compressed
+            }));
+            addLog('[ICE重启] 已通过信令发送ICE重启Offer');
+
+            // 等待连接恢复
+            var maxWait2 = 8000;
+            var interval2 = 500;
+            var waited2 = 0;
+            return new Promise(function (resolve) {
+                var check2 = function () {
+                    if (restartPc.connectionState === 'connected') {
+                        addLog('[ICE重启] 信令重新协商成功');
+                        resolve(true);
+                        return;
+                    }
+                    waited2 += interval2;
+                    if (waited2 >= maxWait2) {
+                        addLog('[ICE重启] 信令重新协商超时');
+                        resolve(false);
+                        return;
+                    }
+                    setTimeout(check2, interval2);
+                };
+                setTimeout(check2, interval2);
+            });
+        }
+
+        return false;
+    } catch (e) {
+        addLog('[ICE重启] 信令协商错误: ' + e.message);
+        return false;
+    }
+}
+
 function replaceIceCandidateIp(candidateStr) {
     if (!candidateStr || typeof candidateStr !== 'string') return candidateStr;
 
@@ -1731,6 +1864,7 @@ window.extractLocalUfrag = extractLocalUfrag;
 window.checkInBandCandidatesForCarrierNat = checkInBandCandidatesForCarrierNat;
 window.attemptGatewayBurstOnFailure = attemptGatewayBurstOnFailure;
 window.reconnectWithCarrierNatReplacement = reconnectWithCarrierNatReplacement;
+window.iceRestart = iceRestart;
 window.renderRegexPatternList = renderRegexPatternList;
 window.applyRegexPatternChanges = applyRegexPatternChanges;
 window.addRegexPattern = addRegexPattern;
